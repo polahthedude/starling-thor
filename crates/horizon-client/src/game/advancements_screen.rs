@@ -798,6 +798,50 @@ impl Game<'_> {
         let view = self.adv_view();
         self.adv_scroll_by(&view, f64::from(dx), f64::from(dy));
     }
+    /// A controller button on the advancements screen (a dual-screen handheld's second screen
+    /// draws it whole); true when taken: the shoulders and triggers change tab, the D-pad (and
+    /// the stick, as it) moves over the tree.
+    #[cfg(target_os = "android")]
+    pub(super) fn advancements_pad(&mut self, button: horizon_client::gamepad::Button) -> bool {
+        use horizon_client::gamepad::Button as B;
+        const STEP: f64 = 24.0;
+        let view = self.adv_view();
+        let (dx, dy) = match button {
+            B::LeftBumper | B::RightBumper | B::LeftTrigger | B::RightTrigger => {
+                let forward = matches!(button, B::RightBumper | B::RightTrigger);
+                let n = view.tabs.len();
+                if n > 0 {
+                    let at = view
+                        .tabs
+                        .iter()
+                        .position(|&t| Some(t) == self.adv_ui.tab)
+                        .unwrap_or(0);
+                    let step = if forward { 1 } else { n - 1 };
+                    let next = view.tabs[(at + step) % n];
+                    if self.adv_ui.tab != Some(next) {
+                        self.adv_ui.tab = Some(next);
+                        self.adv_ui.scroll = None;
+                        self.audio
+                            .play("minecraft:ui.button.click", None, 0.25, 1.0);
+                    }
+                }
+                return true;
+            }
+            // The tree moves the other way, as under a dragging finger.
+            B::DPadLeft => (STEP, 0.0),
+            B::DPadRight => (-STEP, 0.0),
+            B::DPadUp => (0.0, STEP),
+            B::DPadDown => (0.0, -STEP),
+            _ => return false,
+        };
+        self.adv_scroll_by(&view, dx, dy);
+        // The pointer at the tree's middle: the advancement moved under it shows its tooltip,
+        // as under a crosshair.
+        let (w, h) = self.gui_size();
+        let (left, top) = window(w, h);
+        self.cursor = (left + 9.0 + 117.0, top + 18.0 + 56.0);
+        true
+    }
     pub(super) fn advancements_scroll(&mut self, x: f32, y: f32) {
         let view = self.adv_view();
         self.adv_scroll_by(&view, f64::from(x) * 16.0, f64::from(y) * 16.0);

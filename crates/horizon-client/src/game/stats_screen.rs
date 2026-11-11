@@ -624,6 +624,35 @@ impl Game<'_> {
             }
         }
     }
+    /// A controller button on the statistics screen (a dual-screen handheld's second screen
+    /// draws it whole); true when taken: the shoulders and triggers change tab, up and down
+    /// scroll the list.
+    #[cfg(target_os = "android")]
+    pub(super) fn stats_pad(&mut self, button: horizon_client::gamepad::Button) -> bool {
+        use horizon_client::gamepad::Button as B;
+        match button {
+            B::LeftBumper | B::RightBumper | B::LeftTrigger | B::RightTrigger => {
+                let forward = matches!(button, B::RightBumper | B::RightTrigger);
+                let tabs: Vec<usize> = (0..3).filter(|&i| self.stats_tab_active(i)).collect();
+                let Some(at) = tabs.iter().position(|&i| i == self.stats_ui.tab) else {
+                    return true;
+                };
+                let n = tabs.len();
+                let step = if forward { 1 } else { n - 1 };
+                let next = tabs[(at + step) % n];
+                if next != self.stats_ui.tab {
+                    self.stats_ui.tab = next;
+                    self.stats_ui.scroll.amount = 0.0;
+                    self.audio
+                        .play("minecraft:ui.button.click", None, 0.25, 1.0);
+                }
+            }
+            B::DPadUp => self.stats_scroll(1.0),
+            B::DPadDown => self.stats_scroll(-1.0),
+            _ => return false,
+        }
+        true
+    }
     pub(super) fn stats_scroll(&mut self, amount: f32) {
         let (row_h, _) = self.stats_rows();
         let h = self.gui_size().1;

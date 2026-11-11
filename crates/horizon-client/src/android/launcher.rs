@@ -259,6 +259,8 @@ impl Launcher {
         }
         if let Some(mut game) = self.game.take() {
             game.exiting(events);
+            // The second screen's surface goes before the renderer it was made with.
+            crate::game::release_second_screen();
             drop(game);
         }
         crate::game::android_reset_bundled_mods();
@@ -300,9 +302,12 @@ impl Launcher {
         }
     }
     pub(super) fn configure_screen(&self) {
+        let screen = &self.catalog.config.screen;
+        // A dual-screen handheld playing on both screens has its controls in hand: no gesture
+        // bar over the top screen's bottom edge, whatever the immersive setting.
         crate::native_ime::configure_screen(
-            self.catalog.config.screen.immersive,
-            self.catalog.config.screen.avoid_cutout,
+            screen.immersive || screen.second_screen,
+            screen.avoid_cutout,
         );
         winit::platform::android::set_native_content_aspect(
             self.catalog.config.screen.aspect.ratio(),

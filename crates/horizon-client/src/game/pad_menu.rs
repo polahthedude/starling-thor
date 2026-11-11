@@ -413,6 +413,8 @@ impl Game<'_> {
         button: Button,
         down: bool,
     ) -> Result<()> {
+        #[cfg(target_os = "android")]
+        let _layout = self.lower_layout();
         if !down {
             match button {
                 Button::South if self.pad.menu.held[0] => {
@@ -754,6 +756,9 @@ impl Game<'_> {
     /// follows its widget from frame to frame, and the OS pointer hides
     /// while the pad drives.
     pub(super) fn pad_menu_frame(&mut self, event_loop: &dyn EventLoopCtl) {
+        // A screen moved to a dual-screen handheld's second screen: its layout there.
+        #[cfg(target_os = "android")]
+        let _layout = self.lower_layout();
         let now = Instant::now();
         let seconds = self
             .pad

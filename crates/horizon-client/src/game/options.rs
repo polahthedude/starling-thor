@@ -283,6 +283,39 @@ impl Game<'_> {
         self.ui.options = ui;
         self.handle_option_events(events)
     }
+    /// The controller on Options shown on a dual-screen handheld's second screen: Options' own
+    /// keyboard focus (vanilla's arrow-key navigation, A as Enter), but left and right step a
+    /// focused slider or cycle button at once.
+    #[cfg(target_os = "android")]
+    pub(super) fn options_pad(&mut self, button: horizon_client::gamepad::Button) -> bool {
+        use horizon_client::gamepad::Button as B;
+        let key = match button {
+            B::DPadUp => KeyCode::ArrowUp,
+            B::DPadDown => KeyCode::ArrowDown,
+            B::DPadLeft | B::DPadRight => {
+                let forward = button == B::DPadRight;
+                let mut ui = std::mem::take(&mut self.ui.options);
+                let events = ui.pad_side(&mut self.settings, forward);
+                self.ui.options = ui;
+                match events {
+                    Some(events) => {
+                        if let Err(error) = self.handle_option_events(events) {
+                            log::warn!("Options: {error}");
+                        }
+                        return true;
+                    }
+                    None if forward => KeyCode::ArrowRight,
+                    None => KeyCode::ArrowLeft,
+                }
+            }
+            B::South => KeyCode::Enter,
+            _ => return false,
+        };
+        if let Err(error) = self.options_key(key, None) {
+            log::warn!("Options: {error}");
+        }
+        true
+    }
     /// Ctrl+A/C/V/X in the options' search boxes; false when none has focus.
     pub(super) fn options_shortcut(
         &mut self,

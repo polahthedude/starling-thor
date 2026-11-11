@@ -2368,6 +2368,16 @@ impl OptionsUi {
         }
         events
     }
+    /// A controller's left or right on the keyboard-focused widget: a slider steps its value
+    /// and a cycle button its option at once, without Enter first (vanilla's sliders take
+    /// arrows only after it); None when the focus is on something else.
+    pub fn pad_side(&mut self, s: &mut Settings, forward: bool) -> Option<Vec<Event>> {
+        match self.focus.clone()? {
+            FocusId::Slider(opt) => Some(self.step_slider_option(s, opt, forward, 150.0)),
+            FocusId::Cycle(opt) => Some(self.cycle_option(s, opt, !forward, self.framebuffer)),
+            _ => None,
+        }
+    }
     /// Open a page whose Done/Escape returns directly to the calling screen.
     pub fn open_at(&mut self, in_world: bool, page: Page) {
         self.stack.clear();

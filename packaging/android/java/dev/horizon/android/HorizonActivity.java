@@ -11,6 +11,8 @@ public final class HorizonActivity extends android.app.NativeActivity {
     private static native void nativeSecondSurfaceGone();
     /** A finger on the second screen: 0 down, 1 moved, 2 up; in the surface's pixels. */
     private static native void nativeSecondTouch(int action, float x, float y);
+    /** The system bars may be back: the game applies its screen preferences again. */
+    private static native void nativeReapplyScreen();
 
     private boolean secondScreenWanted;
     /** Between onStart and onStop: the Presentation shows only while the game is visible. */
@@ -112,6 +114,18 @@ public final class HorizonActivity extends android.app.NativeActivity {
         } catch (android.view.WindowManager.InvalidDisplayException e) {
             android.util.Log.w("Horizon", "Second screen: " + e);
         }
+        // Showing a window on the other display brings the game window's bars back, some time
+        // after: hide them again once it has settled.
+        android.view.View decor = getWindow().getDecorView();
+        decor.postDelayed(HorizonActivity::nativeReapplyScreen, 300);
+        decor.postDelayed(HorizonActivity::nativeReapplyScreen, 1200);
+    }
+
+    /** Android shows the bars again when the window loses and regains focus (a dialog, the
+     *  notification shade, the other display touched): the immersive mode goes back on. */
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) nativeReapplyScreen();
     }
 
     @Override protected void onStart() {

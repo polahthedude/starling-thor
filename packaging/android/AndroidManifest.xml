@@ -13,12 +13,15 @@
                 <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
             </intent-filter>
         </provider>
-        <activity android:name="dev.horizon.android.HorizonActivity" android:exported="false" android:screenOrientation="sensorLandscape" android:configChanges="orientation|screenSize|keyboardHidden|keyboard|navigation|density|screenLayout" android:windowSoftInputMode="adjustResize" android:theme="@style/HorizonGameTheme">
+        <!-- One game: a second launch (from the other display too) brings the running one back. -->
+        <activity android:name="dev.horizon.android.HorizonActivity" android:exported="false" android:launchMode="singleTask" android:screenOrientation="sensorLandscape" android:configChanges="orientation|screenSize|keyboardHidden|keyboard|navigation|density|screenLayout" android:windowSoftInputMode="adjustResize" android:theme="@style/HorizonGameTheme">
             <meta-data android:name="android.app.lib_name" android:value="horizon_android" />
         </activity>
+        <!-- Starts the game on the main display (dual-screen handhelds), then goes; in its own
+             task affinity so the game's task is made (or found) there, not beside it. -->
+        <activity android:name="dev.horizon.android.LaunchActivity" android:exported="false" android:theme="@android:style/Theme.NoDisplay" android:taskAffinity="" android:excludeFromRecents="true" android:noHistory="true" />
         <!-- Keep installed launcher shortcuts targeting the previous component. -->
-        <activity-alias android:name="com.google.androidgamesdk.GameActivity" android:targetActivity="dev.horizon.android.HorizonActivity" android:exported="true">
-            <meta-data android:name="android.app.lib_name" android:value="horizon_android" />
+        <activity-alias android:name="com.google.androidgamesdk.GameActivity" android:targetActivity="dev.horizon.android.LaunchActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

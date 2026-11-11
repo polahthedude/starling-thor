@@ -271,6 +271,8 @@ mod sculk;
 mod sculk_fixture;
 #[cfg(target_os = "android")]
 mod second_screen;
+#[cfg(target_os = "android")]
+pub(crate) use second_screen::release as release_second_screen;
 mod server_links;
 mod server_mods;
 mod server_packs;
@@ -15625,7 +15627,10 @@ impl Game<'_> {
                 && self.player.is_some()
                 && (self.screen.blurs_background(self.pause_menu)
                     || self.dialog_open()
-                    || (self.screen == Screen::Win && self.win_screen_pauses())));
+                    || (self.screen == Screen::Win && self.win_screen_pauses())
+                    // Dual screen: the world over the inventory on the second screen.
+                    || (matches!(self.screen, Screen::Inventory | Screen::Creative)
+                        && self.screen_on_second_screen())));
         let radius = self.settings.menu_blur as f32;
         (blurred && radius >= 1.0).then_some(radius)
     }

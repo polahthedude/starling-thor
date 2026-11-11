@@ -1580,6 +1580,13 @@ impl Title {
         }
         folder
     }
+    /// Game Rules, Experiments or its confirmation is open over the screen (they draw and
+    /// press their own widgets).
+    pub fn overlay_open(&self) -> bool {
+        self.rules.borrow().is_some()
+            || self.experiments.borrow().is_some()
+            || self.confirm_experiments.borrow().is_some()
+    }
     /// The main screen's buttons as (id, label, enabled), for a second screen that draws them
     /// and presses them by id (`focused_button` and `confirm_key_size`). Empty off the main
     /// screen.

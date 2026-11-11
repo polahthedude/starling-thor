@@ -1392,6 +1392,11 @@ impl Game<'_> {
         events: &dyn super::event_loop::EventLoopCtl,
         id: WindowId,
     ) {
+        // A screen shown on a dual-screen handheld's second screen is touched there, laid out
+        // at its size: a finger on the window would land elsewhere.
+        if t.id != super::second_screen::LOWER_FINGER && self.screen_on_second_screen() {
+            return;
+        }
         self.android_sync_pointer();
         if self.pad.touch_ui.virtual_mouse {
             self.android_virtual_touch(t, events, id);
@@ -1455,6 +1460,12 @@ impl Game<'_> {
             }
             Gesture::Scroll(y) if self.screen == Screen::Options => {
                 let size = self.options_size();
+                // On a dual-screen handheld's second screen the list runs the other way.
+                let y = if t.id == super::second_screen::LOWER_FINGER {
+                    -y
+                } else {
+                    y
+                };
                 self.ui
                     .options
                     .touch_scroll(&self.settings, size, (p[0], p[1]), y);

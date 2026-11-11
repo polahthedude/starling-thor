@@ -1279,23 +1279,76 @@ pub struct EndPortalFill {
 pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
     u32::from(a) << 24 | u32::from(b) << 16 | u32::from(g) << 8 | u32::from(r)
 }
+thread_local! {
+    /// While set (`LayoutAs`): batches made for this window size are laid out at this scale
+    /// and GUI size instead.
+    static LAYOUT_AS: std::cell::Cell<Option<([u32; 2], (f32, f32, f32))>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// While alive, `HudBatch::new(window)` lays out as a `size` pixel display with at least
+/// `min` GUI pixels would (`HudBatch::scale_for`): a dual-screen handheld's screen moved to
+/// its second display, laid out, hit-tested and drawn at that display's size. The window's own
+/// drawing makes its batches outside it.
+pub struct LayoutAs(Option<([u32; 2], (f32, f32, f32))>);
+
+impl LayoutAs {
+    pub fn new(window: [u32; 2], size: Option<([u32; 2], [u32; 2])>) -> Self {
+        let layout = size.map(|(size, min)| {
+            let scale = HudBatch::scale_for(size, min);
+            (
+                window,
+                (
+                    scale,
+                    (size[0] as f32 / scale).ceil(),
+                    (size[1] as f32 / scale).ceil(),
+                ),
+            )
+        });
+        Self(LAYOUT_AS.replace(layout))
+    }
+}
+
+impl Drop for LayoutAs {
+    fn drop(&mut self) {
+        LAYOUT_AS.set(self.0);
+    }
+}
+
 impl HudBatch {
-    /// Window.calculateScale: the largest scale keeping >= 320x240 GUI pixels,
-    /// capped by the GUI Scale option (0 = auto).
-    pub fn new(window: [u32; 2]) -> Self {
+    /// Window.calculateScale: the largest scale keeping at least `min` GUI pixels (320x240
+    /// for the window), capped by the GUI Scale option (0 = auto).
+    pub fn scale_for(window: [u32; 2], min: [u32; 2]) -> f32 {
         let limit = GUI_SCALE.load(std::sync::atomic::Ordering::Relaxed);
         let mut scale = 1;
         while (limit == 0 || scale < limit)
-            && window[0] / (scale + 1) >= 320
-            && window[1] / (scale + 1) >= 240
+            && window[0] / (scale + 1) >= min[0]
+            && window[1] / (scale + 1) >= min[1]
         {
             scale += 1;
         }
+        scale as f32
+    }
+    /// Window.calculateScale: the largest scale keeping >= 320x240 GUI pixels,
+    /// capped by the GUI Scale option (0 = auto).
+    pub fn new(window: [u32; 2]) -> Self {
+        // A screen of this window laid out on another display (`LayoutAs`).
+        let (scale, width, height) = match LAYOUT_AS.get() {
+            Some((of, layout)) if of == window => layout,
+            _ => {
+                let scale = Self::scale_for(window, [320, 240]);
+                (
+                    scale,
+                    (window[0] as f32 / scale).ceil(),
+                    (window[1] as f32 / scale).ceil(),
+                )
+            }
+        };
         Self {
             vertices: Vec::new(),
-            scale: scale as f32,
-            width: (window[0] as f32 / scale as f32).ceil(),
-            height: (window[1] as f32 / scale as f32).ceil(),
+            scale,
+            width,
+            height,
             patches: Vec::new(),
             blends: Vec::new(),
             end_portal: EndPortalFill::default(),

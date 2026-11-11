@@ -210,25 +210,54 @@ pub fn dual_panel(width: f32, height: f32) -> DualPanel {
 pub mod dual_menu {
     pub const SLOT: f32 = 18.0;
     pub const TAB: f32 = 22.0;
-    /// The slots of the inventory tab, by the game's slot numbers: the armor (500 to 503) and
-    /// off-hand (504) row, then the 27 slots of the main inventory (9 to 35); each its 18-pixel
-    /// square's top left.
+    /// The player's box between the armor column and the off-hand slot (`DOLL` wide).
+    const DOLL: f32 = 52.0;
+    /// The inventory tab's height under the hotbar band: the armor column, a gap, the 27
+    /// slots.
+    pub const INVENTORY_HEIGHT: f32 = 3.0 + 4.0 * SLOT + 4.0 + 3.0 * SLOT;
+    /// The armor column, the player's box and the off-hand slot together, centered.
+    fn inventory_left(width: f32) -> f32 {
+        ((width - (SLOT + 4.0 + DOLL + 4.0 + SLOT)) / 2.0).floor()
+    }
+    /// The slots of the inventory tab, by the game's slot numbers, as the console editions'
+    /// inventory: the armor (500 to 503) in a column, the player's box beside it
+    /// (`inventory_doll`) with the off-hand slot (504) at its lower right, then the 27 slots of
+    /// the main inventory (9 to 35); each its 18-pixel square's top left.
     pub fn inventory(width: f32, top: f32) -> Vec<(usize, [f32; 2])> {
         let mut out = Vec::with_capacity(32);
-        // Four armor slots, a gap, the off-hand slot.
-        let row = 5.0 * SLOT + 6.0;
-        let x = ((width - row) / 2.0).floor();
-        let y = top + 4.0;
+        let x = inventory_left(width);
+        let y = top + 3.0;
         for i in 0..4 {
-            out.push((500 + i, [x + i as f32 * SLOT, y]));
+            out.push((500 + i, [x, y + i as f32 * SLOT]));
         }
-        out.push((504, [x + 4.0 * SLOT + 6.0, y]));
+        out.push((504, [x + SLOT + 4.0 + DOLL + 4.0, y + 3.0 * SLOT]));
         let x = ((width - 9.0 * SLOT) / 2.0).floor();
+        let y = y + 4.0 * SLOT + 4.0;
         for i in 0..27 {
             let (c, r) = ((i % 9) as f32, (i / 9) as f32);
-            out.push((9 + i, [x + c * SLOT, y + SLOT + 6.0 + r * SLOT]));
+            out.push((9 + i, [x + c * SLOT, y + r * SLOT]));
         }
         out
+    }
+    /// The player's box on the inventory tab, as tall as the armor column.
+    pub fn inventory_doll(width: f32, top: f32) -> [f32; 4] {
+        let x = inventory_left(width) + SLOT + 4.0;
+        [x, top + 3.0, DOLL, 4.0 * SLOT]
+    }
+    /// The largest GUI scale up to the panel's at which `tabs` tabs are square around their
+    /// icons (`tab_scale`) and the inventory tab fits between the hotbar band (`band`) and
+    /// the tabs.
+    pub fn inventory_scale(size_px: [u32; 2], tabs: usize, band: f32) -> f32 {
+        let mut scale = tab_scale(size_px[0], tabs);
+        let fits = |scale: f32| {
+            let width = (size_px[0] as f32 / scale).ceil();
+            let height = (size_px[1] as f32 / scale).ceil();
+            band + INVENTORY_HEIGHT + 2.0 + tab_size(width, tabs) + 2.0 <= height
+        };
+        while scale > 1.0 && !fits(scale) {
+            scale -= 1.0;
+        }
+        scale
     }
     /// The side of the tab bar's square tabs: `tabs` category tabs and the inventory's across
     /// `width`, 1 apart with 4 more before the inventory's, at most `TAB`.
@@ -3156,12 +3185,17 @@ mod tests {
         // 207 wide (the Thor's lower screen at scale 6), below the 24-pixel hotbar band.
         let slots = inventory(207.0, 24.0);
         assert_eq!(slots.len(), 32);
-        // Armor and off-hand: 96 wide (5 slots and a 6 gap) from x 55, at y 28.
-        assert_eq!(slots[0], (500, [55.0, 28.0]));
-        assert_eq!(slots[4], (504, [133.0, 28.0]));
-        // The inventory grid, 162 wide from x 22, 24 lower (a slot and a 6 gap).
-        assert_eq!(slots[5], (9, [22.0, 52.0]));
-        assert_eq!(slots[31], (35, [166.0, 88.0]));
+        // The armor column, the player's box and the off-hand slot: 18 + 4 + 52 + 4 + 18 = 96
+        // wide from x 55, from y 27; the boots at the column's foot, the off-hand beside them.
+        assert_eq!(slots[0], (500, [55.0, 27.0]));
+        assert_eq!(slots[3], (503, [55.0, 81.0]));
+        assert_eq!(slots[4], (504, [133.0, 81.0]));
+        assert_eq!(inventory_doll(207.0, 24.0), [77.0, 27.0, 52.0, 72.0]);
+        // The inventory grid, 162 wide from x 22, 4 under the column (27 + 72 + 4).
+        assert_eq!(slots[5], (9, [22.0, 103.0]));
+        assert_eq!(slots[31], (35, [166.0, 139.0]));
+        // 24 + 133 + 2 + 22 + 2 = 183 doesn't fit the Thor's 180 at scale 6: 5 (216 tall).
+        assert_eq!(inventory_scale([1240, 1080], 7, 24.0), 5.0);
         let (categories, inventory_tab) = tabs(207.0, 180.0, 4);
         assert_eq!(categories[1], [27.0, 156.0, 22.0, 22.0]);
         assert_eq!(inventory_tab, [181.0, 156.0, 22.0, 22.0]);
