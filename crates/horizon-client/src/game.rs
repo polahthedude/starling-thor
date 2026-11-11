@@ -139,6 +139,7 @@ mod golems;
 mod growth;
 mod hand;
 mod headless;
+mod hotbar;
 mod ime;
 mod initial_spawn;
 mod integrated;
@@ -268,6 +269,8 @@ mod screen_info;
 mod screens;
 mod sculk;
 mod sculk_fixture;
+#[cfg(target_os = "android")]
+mod second_screen;
 mod server_links;
 mod server_mods;
 mod server_packs;
@@ -8071,7 +8074,10 @@ impl Game<'_> {
             self.fire_screen_render_post(&mut batch);
             return batch;
         }
-        if self.screen == Screen::Options && !self.touch_editing() {
+        if self.screen == Screen::Options
+            && !self.touch_editing()
+            && !self.screen_on_second_screen()
+        {
             if self.title.is_none() {
                 self.flush_skin_slots();
                 self.update_remote_skins();
@@ -8082,7 +8088,7 @@ impl Game<'_> {
             return batch;
         }
         // A mod's settings page opened from Options > Mods at the title.
-        if self.screen == Screen::Mod && self.title.is_some() {
+        if self.screen == Screen::Mod && self.title.is_some() && !self.screen_on_second_screen() {
             self.draw_mod_screen(&mut batch);
             return batch;
         }
@@ -8113,14 +8119,22 @@ impl Game<'_> {
             // draws the toast manager on every screen, so a pack download or a
             // resource-reload failure still shows on the title (#4428).
             if let Some(title) = &self.title {
-                title.draw_with_items(
-                    &self.gui.atlas,
-                    Some(&self.pack.item_renderer),
-                    &mut batch,
-                    self.cursor,
-                    self.settings.file.bool("hideSplashTexts"),
-                );
+                let hide_splash = self.settings.file.bool("hideSplashTexts");
+                // Dual screen: the title's other screens are on the second screen.
+                if self.screen_on_second_screen() {
+                    title.draw_banner(&self.gui.atlas, &mut batch, hide_splash);
+                } else {
+                    title.draw_with_items(
+                        &self.gui.atlas,
+                        Some(&self.pack.item_renderer),
+                        &mut batch,
+                        self.cursor,
+                        hide_splash,
+                    );
+                }
             }
+            #[cfg(target_os = "android")]
+            self.draw_title_hints(&mut batch);
             self.draw_toasts(&mut batch, false);
             self.draw_tutorial_toasts(&mut batch, false);
             self.draw_pack_toasts(&mut batch, false);
@@ -8152,6 +8166,13 @@ impl Game<'_> {
         let spectator = self.spectator();
         let (wi, hi) = (w as i32, h as i32);
         let show_hud = !self.ui.hide_gui;
+        // Dual-screen handhelds: the hotbar and item name on the second screen, the bars at the
+        // top of this one, the boss bars under them.
+        #[cfg(target_os = "android")]
+        let dual = second_screen::active();
+        #[cfg(not(target_os = "android"))]
+        let dual = false;
+        let mut boss_bars = 0..0;
         // max(Hud.leftHeight, Hud.rightHeight) after the bars: the item name and
         // the action bar sit above it.
         let mut bar_height = 39;
@@ -8180,44 +8201,19 @@ impl Game<'_> {
                 let draws = hud_layout::crosshair(wi, hi, attack, full);
                 hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
             }
-            if spectator {
-                self.draw_spectator_hotbar(&mut batch);
-            } else {
-                let partial = self.clock.fraction() as f32;
-                let inputs = hud_layout::HotbarInputs {
-                    selected: self.selected as i32,
-                    right_handed: !self.settings.main_hand_left,
-                    offhand: self.offhand.is_some(),
-                    slots: std::array::from_fn(|i| {
-                        self.inventory[i]
-                            .as_ref()
-                            .map(|_| (f32::from(self.hotbar_pop[i]) - partial).max(0.0))
-                    }),
-                    offhand_pop: (f32::from(self.hotbar_pop[9]) - partial).max(0.0),
-                    attack: (indicator == 2).then_some(strength),
-                };
-                #[cfg(target_os = "android")]
-                let attack_left = Some(self.settings.touch.attack_indicator_left);
-                #[cfg(not(target_os = "android"))]
-                let attack_left = None;
-                let draws = hud_layout::hotbar_with_attack_side(wi, hi, &inputs, attack_left);
-                hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
-                for d in &draws {
-                    if let hud_layout::GuiDraw::Item { slot, x, y, .. } = *d {
-                        let stack = if slot == 40 {
-                            self.offhand.as_ref()
-                        } else {
-                            self.inventory[slot as usize].as_ref()
-                        };
-                        if let Some(stack) = stack {
-                            self.draw_item(&mut batch, stack, x as f32, y as f32);
-                        }
-                    }
-                }
+            // On a dual-screen handheld the hotbar is on the second screen.
+            if !dual {
+                self.draw_hotbar(&mut batch);
+            }
+            #[cfg(target_os = "android")]
+            if dual {
+                second_screen::show_hotbar();
             }
             horizon_client::hud::inset_overlay(&mut batch, margins, |b| self.draw_effect_icons(b));
             // Hud: the action bar and titles draw over the hotbar (nextStratum).
+            let bosses = batch.vertices.len();
             horizon_client::hud::inset_overlay(&mut batch, margins, |b| self.draw_boss_bars(b));
+            boss_bars = bosses..batch.vertices.len();
             horizon_client::hud::inset_overlay(&mut batch, margins, |b| self.draw_extras(b));
             self.draw_mod_shapes(&mut batch);
         }
@@ -8233,6 +8229,9 @@ impl Game<'_> {
                 self.experience_recent(),
             );
             use horizon_client::locator_bar::ContextualBar;
+            // From here to the item name: the bars that sit above the hotbar.
+            let band = batch.vertices.len();
+            let (mut armor, mut air) = (0..0, 0..0);
             // The mount's hearts (and the jump bar).
             let vehicle_hearts = if spectator {
                 0
@@ -8320,7 +8319,22 @@ impl Game<'_> {
                 };
                 // A fresh borrow: the hook ran with all of `self`.
                 let atlas = &self.gui.atlas;
+                // Dual screen: the armor and the air rows last, to be placed on their own.
+                let row = |d: &hud_layout::GuiDraw, name: &str| {
+                    dual && matches!(d, hud_layout::GuiDraw::Sprite { sprite, .. }
+                        if sprite.starts_with(name))
+                };
+                let (armor_draws, draws): (Vec<_>, Vec<_>) =
+                    draws.into_iter().partition(|d| row(d, "hud/armor"));
+                let (air_draws, draws): (Vec<_>, Vec<_>) =
+                    draws.into_iter().partition(|d| row(d, "hud/air"));
                 hud_layout::paint(&mut batch, atlas, &draws);
+                armor = batch.vertices.len()..batch.vertices.len();
+                hud_layout::paint(&mut batch, atlas, &armor_draws);
+                armor.end = batch.vertices.len();
+                air = armor.end..armor.end;
+                hud_layout::paint(&mut batch, atlas, &air_draws);
+                air.end = batch.vertices.len();
                 bar_height = self
                     .health_hud
                     .left_height
@@ -8342,7 +8356,22 @@ impl Game<'_> {
                 let draws = self.locator_bar_draws(wi, hi);
                 hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
             }
+            if dual {
+                // ponytail: a fixed 1-pixel margin; the cutout inset (`margins`) if a device's
+                // edges hide the bars.
+                let end = batch.vertices.len();
+                horizon_client::hud::dual_screen_bars(
+                    &mut batch,
+                    band..end,
+                    armor,
+                    air,
+                    boss_bars,
+                    1.0,
+                );
+            }
             if !spectator {
+                // Dual screen: where the hotbar was, the bars being at the top.
+                let bar_height = if dual { 39 } else { bar_height };
                 self.draw_selected_name(&mut batch, bar_height, !self.creative);
             }
         }
@@ -8371,7 +8400,8 @@ impl Game<'_> {
         batch.blur_at = batch.vertices.len() as u32;
         // PackConfirmScreen takes the open screen's place (it comes back once
         // the prompt is answered): the screen under the prompt isn't drawn.
-        let screen = if self.server_packs.prompt.is_some() {
+        // Dual screen: the inventory and containers draw on the second screen instead.
+        let screen = if self.server_packs.prompt.is_some() || self.screen_on_second_screen() {
             Screen::Playing
         } else {
             self.screen
@@ -8417,6 +8447,9 @@ impl Game<'_> {
             Screen::Mod => self.draw_mod_screen(&mut batch),
             Screen::Playing | Screen::Options | Screen::Win => {}
         }
+        // Dual screen: the inventory's player or the crafting's recipe, over the world.
+        #[cfg(target_os = "android")]
+        self.draw_legacy_upper(&mut batch);
         self.fire_screen_render_post(&mut batch);
         horizon_client::hud::inset_overlay(&mut batch, margins, |b| self.draw_saving_indicator(b));
         horizon_client::hud::inset_overlay(&mut batch, margins, |b| self.draw_toasts(b, !show_hud));
@@ -14835,7 +14868,8 @@ impl Game<'_> {
             && self.player.is_some()
             && !self.pad.touch_ui.floating_menu
             && (self.singleplayer_paused()
-                || self.screen != Screen::Playing
+                // Dual screen: the world keeps moving above a screen on the second screen.
+                || (self.screen != Screen::Playing && !self.screen_on_second_screen())
                 || self.pad.touch.editor.is_some())
             && (self.singleplayer_paused()
                 || self.pad.touch.editor.is_some()
@@ -18131,6 +18165,8 @@ impl Game<'_> {
                     self.tick_world_icon();
                     let ticked = Instant::now();
                     let rendered = self.render()?;
+                    #[cfg(target_os = "android")]
+                    self.second_screen_frame(event_loop, id);
                     self.apply_cursor_icon();
                     if let Some(threshold) = self.options.spikes
                         && let Some(r) = self.renderer.as_ref()

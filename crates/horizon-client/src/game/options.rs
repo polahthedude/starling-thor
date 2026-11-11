@@ -169,6 +169,15 @@ impl Game<'_> {
             self.ui.options.update_pack_infos(infos);
         }
     }
+    /// Where Options lays itself out: the window's GUI, or a dual-screen handheld's second
+    /// screen's when it opened there (`second_screen.rs`), so its clicks land as drawn.
+    pub(super) fn options_size(&self) -> (f32, f32) {
+        #[cfg(target_os = "android")]
+        if let Some(size) = self.lower_options_size() {
+            return size;
+        }
+        self.gui_size()
+    }
     pub(super) fn draw_options(&mut self, batch: &mut HudBatch) {
         self.watch_pack_folder();
         let mut ui = std::mem::take(&mut self.ui.options);
@@ -223,7 +232,7 @@ impl Game<'_> {
         if !right {
             self.dragging = true;
         }
-        let size = self.gui_size();
+        let size = self.options_size();
         let framebuffer = self.renderer.as_ref().map_or([1280, 720], |r| {
             [r.config.width as i32, r.config.height as i32]
         });
@@ -243,7 +252,7 @@ impl Game<'_> {
         self.handle_option_events(events)
     }
     pub(super) fn options_drag(&mut self) -> Result<()> {
-        let size = self.gui_size();
+        let size = self.options_size();
         let framebuffer = self.renderer.as_ref().map_or([1280, 720], |r| {
             [r.config.width as i32, r.config.height as i32]
         });
@@ -262,7 +271,7 @@ impl Game<'_> {
         self.handle_option_events(events)
     }
     pub(super) fn options_key(&mut self, key: KeyCode, text: Option<&str>) -> Result<()> {
-        let size = self.gui_size();
+        let size = self.options_size();
         let shift = self.has_shift_down();
         let framebuffer = self.renderer.as_ref().map_or([1280, 720], |r| {
             [r.config.width as i32, r.config.height as i32]
@@ -294,7 +303,7 @@ impl Game<'_> {
             self.ui.options = ui;
             return self.handle_option_events(events);
         }
-        let size = self.gui_size();
+        let size = self.options_size();
         let events =
             self.ui
                 .options

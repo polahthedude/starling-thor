@@ -96,6 +96,93 @@ pub const MAX_ATLAS_SIZE: u32 = 16384;
 pub const MAP_SLOTS: usize = 256;
 /// The atlas slot the minimap extra draws into.
 pub const MINIMAP_SPRITE: &str = "horizon/minimap";
+/// A title logo of the player's own (the Android build's, unpacked from its APK), drawn over
+/// the title screen's logo and edition banner when set before the atlas is built. Never part
+/// of the repository: it lives with the player's private resources.
+pub const TITLE_LOGO_SPRITE: &str = "horizon/title_logo";
+pub static TITLE_LOGO: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+/// The title logo made ready for the atlas: a plain light background reaching the edges
+/// (an image without transparency) made transparent, the logo cropped to what is left, and
+/// scaled down to `max` pixels wide.
+pub fn prepare_logo(w: u32, h: u32, mut rgba: Vec<u8>, max: u32) -> (u32, u32, Vec<u8>) {
+    let (w, h) = (w as usize, h as usize);
+    let background = |p: &[u8]| p[3] == 0 || p[..3].iter().all(|&c| c >= 235);
+    let mut seen = vec![false; w * h];
+    let mut stack: Vec<usize> = (0..w)
+        .flat_map(|x| [x, (h - 1) * w + x])
+        .chain((0..h).flat_map(|y| [y * w, y * w + w - 1]))
+        .collect();
+    while let Some(i) = stack.pop() {
+        if seen[i] || !background(&rgba[i * 4..i * 4 + 4]) {
+            continue;
+        }
+        seen[i] = true;
+        rgba[i * 4 + 3] = 0;
+        let (x, y) = (i % w, i / w);
+        if x > 0 {
+            stack.push(i - 1);
+        }
+        if x + 1 < w {
+            stack.push(i + 1);
+        }
+        if y > 0 {
+            stack.push(i - w);
+        }
+        if y + 1 < h {
+            stack.push(i + w);
+        }
+    }
+    // The box of what is left.
+    let opaque = |i: usize| rgba[i * 4 + 3] > 0;
+    let rows: Vec<usize> = (0..h)
+        .filter(|&y| (0..w).any(|x| opaque(y * w + x)))
+        .collect();
+    let cols: Vec<usize> = (0..w)
+        .filter(|&x| (0..h).any(|y| opaque(y * w + x)))
+        .collect();
+    let (Some(&y0), Some(&y1), Some(&x0), Some(&x1)) =
+        (rows.first(), rows.last(), cols.first(), cols.last())
+    else {
+        return (1, 1, vec![0; 4]);
+    };
+    let (cw, ch) = (x1 - x0 + 1, y1 - y0 + 1);
+    // Scaled down by averaging each target pixel's source area (alpha-weighted colour).
+    let tw = cw.min(max as usize).max(1);
+    let th = (ch * tw).div_ceil(cw).max(1);
+    let mut out = vec![0u8; tw * th * 4];
+    for ty in 0..th {
+        let (sy0, sy1) = (
+            y0 + ty * ch / th,
+            y0 + ((ty + 1) * ch / th).max(ty * ch / th + 1),
+        );
+        for tx in 0..tw {
+            let (sx0, sx1) = (
+                x0 + tx * cw / tw,
+                x0 + ((tx + 1) * cw / tw).max(tx * cw / tw + 1),
+            );
+            let mut sum = [0u64; 4];
+            for sy in sy0..sy1.min(y0 + ch) {
+                for sx in sx0..sx1.min(x0 + cw) {
+                    let p = &rgba[(sy * w + sx) * 4..(sy * w + sx) * 4 + 4];
+                    let a = u64::from(p[3]);
+                    for c in 0..3 {
+                        sum[c] += u64::from(p[c]) * a;
+                    }
+                    sum[3] += a;
+                }
+            }
+            let n = ((sy1.min(y0 + ch) - sy0) * (sx1.min(x0 + cw) - sx0)).max(1) as u64;
+            let o = (ty * tw + tx) * 4;
+            if sum[3] > 0 {
+                for c in 0..3 {
+                    out[o + c] = (sum[c] / sum[3]) as u8;
+                }
+            }
+            out[o + 3] = (sum[3] / n) as u8;
+        }
+    }
+    (tw as u32, th as u32, out)
+}
 /// Atlas slots for downloaded player skins (`skins/<sha1>`), 64x64 each.
 /// Vanilla registers a texture per skin. Here the slots are shared
 /// (`skins::SkinSlots`): skins drawn in the last frame keep theirs, and a
@@ -380,6 +467,11 @@ impl HudAtlas {
             crate::minimap::SIZE as u32,
             vec![0; crate::minimap::SIZE * crate::minimap::SIZE * 4],
         ));
+        // The player's own title logo, when there is one (`TITLE_LOGO`).
+        if let Some((w, h, rgba)) = TITLE_LOGO.get().and_then(|path| decode(path).ok()) {
+            let (w, h, rgba) = prepare_logo(w, h, rgba, 512);
+            images.push((TITLE_LOGO_SPRITE.into(), w, h, rgba));
+        }
         // Downloaded skins (game/scoreboard.rs).
         for i in 0..SKIN_SLOTS {
             images.push((format!("horizon/skin{i}"), 64, 64, vec![0; 64 * 64 * 4]));
@@ -1005,6 +1097,137 @@ pub fn inset_overlay(batch: &mut HudBatch, margins: [f32; 2], draw: impl FnOnce(
         v.pos[1] += padding[1];
     }
     [batch.width, batch.height] = full;
+}
+/// Scale everything drawn since vertex `start` by `scale` about `pivot`, then move it by
+/// `offset` (GUI pixels); the depth runs' scissors (physical pixels) follow their items.
+pub fn transform_since(
+    batch: &mut HudBatch,
+    start: usize,
+    pivot: [f32; 2],
+    scale: f32,
+    offset: [f32; 2],
+) {
+    let map = |x: f32, y: f32| {
+        [
+            pivot[0] + (x - pivot[0]) * scale + offset[0],
+            pivot[1] + (y - pivot[1]) * scale + offset[1],
+        ]
+    };
+    for v in &mut batch.vertices[start..] {
+        v.pos = map(v.pos[0], v.pos[1]);
+    }
+    let k = batch.scale;
+    for (range, blend) in &mut batch.blends {
+        if range.start as usize >= start
+            && let Blend::Depth(clip) = blend
+        {
+            let [x, y, w, h] = clip.map(|v| v as f32 / k);
+            let [x0, y0] = map(x, y).map(|v| (v * k).floor().max(0.0));
+            let [x1, y1] = map(x + w, y + h).map(|v| (v * k).ceil().max(0.0));
+            *clip = [x0, y0, x1 - x0, y1 - y0].map(|v| v as u32);
+        }
+    }
+}
+/// The scale and shift that fit a row spanning `left..right` across `width`, `margin` inside
+/// each edge, scaled about the middle of `width`: never enlarged; centered when it was scaled.
+pub fn fit_row(left: f32, right: f32, width: f32, margin: f32) -> (f32, f32) {
+    let middle = width / 2.0;
+    let scale = ((width - 2.0 * margin) / (right - left).max(1.0)).min(1.0);
+    let [l, r] = [left, right].map(|x| middle + (x - middle) * scale);
+    // Unscaled rows that fit stay where they are; others move back inside.
+    let dx = if scale < 1.0 {
+        middle - (l + r) / 2.0
+    } else {
+        (margin - l).max(0.0) - (r - (width - margin)).max(0.0)
+    };
+    (scale, dx)
+}
+/// The top and bottom of some vertices.
+fn y_span(vertices: &[HudVertex]) -> Option<(f32, f32)> {
+    vertices.iter().map(|v| v.pos[1]).fold(None, |span, y| {
+        Some(span.map_or((y, y), |(top, bottom): (f32, f32)| {
+            (top.min(y), bottom.max(y))
+        }))
+    })
+}
+/// The left and right of some vertices.
+fn x_span(vertices: &[HudVertex]) -> Option<(f32, f32)> {
+    vertices.iter().map(|v| v.pos[0]).fold(None, |span, x| {
+        Some(span.map_or((x, x), |(l, r): (f32, f32)| (l.min(x), r.max(x))))
+    })
+}
+/// Dual-screen HUD, after New 3DS Edition's top screen (the hotbar is on the other screen),
+/// anchored to the screen's corners: the bars vanilla stacks up from the hotbar (`band`:
+/// experience, hearts, food, air, a mount's hearts) are stacked down from the top edge,
+/// `margin` GUI pixels in. The experience bar (or the jump or locator bar in its place) runs
+/// across the top, the level number centred under it; vanilla's left column (hearts) goes to
+/// the top left corner, its right one (food, a mount's hearts) to the top right, extra rows
+/// under them. The armor row (`armor`, inside `band`) goes to the bottom left corner, the air
+/// bubbles (`air`, inside `band`) to the bottom right, and the boss bars (`bosses`) under the
+/// band. Each sprite keeps its look; only its row is mirrored. The vanilla layouts themselves
+/// stay as they are.
+pub fn dual_screen_bars(
+    batch: &mut HudBatch,
+    band: std::ops::Range<usize>,
+    armor: std::ops::Range<usize>,
+    air: std::ops::Range<usize>,
+    bosses: std::ops::Range<usize>,
+    margin: f32,
+) {
+    let (w, h) = (batch.width, batch.height);
+    // Vanilla: `width / 2` in whole pixels; the bars 91 to each side; the experience bar 5
+    // tall at `height - 29`, ending 24 above the bottom (the hotbar's 22, and 2).
+    let mid = (w / 2.0).floor();
+    let axis = h - 24.0 + margin;
+    let stretch = ((w - 2.0 * margin) / 182.0).max(1.0);
+    let (left, right) = (margin - (mid - 91.0), (w - margin) - (mid + 91.0));
+    let mut bottom = None::<f32>;
+    for start in band.clone().step_by(6) {
+        let quad = start..(start + 6).min(band.end);
+        if armor.contains(&start) || air.contains(&start) {
+            continue;
+        }
+        let (Some((top, low)), Some((l, r))) = (
+            y_span(&batch.vertices[quad.clone()]),
+            x_span(&batch.vertices[quad.clone()]),
+        ) else {
+            continue;
+        };
+        let dy = axis - low - top;
+        let cx = (l + r) / 2.0;
+        let across = |x: f32| {
+            if top >= h - 29.5 {
+                // The bar: stretched across the top.
+                mid + (x - mid) * stretch
+            } else if (cx - mid).abs() < 16.0 && top >= h - 37.0 {
+                // The level number: kept in the middle.
+                x
+            } else if cx < mid {
+                x + left
+            } else {
+                x + right
+            }
+        };
+        for v in &mut batch.vertices[quad] {
+            v.pos = [across(v.pos[0]), v.pos[1] + dy];
+        }
+        bottom = Some(bottom.map_or(axis - top, |b| b.max(axis - top)));
+    }
+    // The armor and the air at the bottom corners.
+    for (range, dx) in [(armor, left), (air, right)] {
+        if let Some((_, low)) = y_span(&batch.vertices[range.clone()]) {
+            let dy = h - margin - low;
+            for v in &mut batch.vertices[range] {
+                v.pos = [v.pos[0] + dx, v.pos[1] + dy];
+            }
+        }
+    }
+    if let (Some(bottom), Some((top, _))) = (bottom, y_span(&batch.vertices[bosses.clone()])) {
+        let dy = (bottom + 2.0 - top).max(0.0);
+        for v in &mut batch.vertices[bosses] {
+            v.pos[1] += dy;
+        }
+    }
 }
 /// One frame of overlay geometry in GUI pixels.
 pub struct HudBatch {
@@ -2295,6 +2518,101 @@ mod tests {
         assert_eq!(batch.vertices[6].pos, padding);
         batch.quad(quad, [[0.0; 2]; 4], u32::MAX);
         assert_eq!(batch.vertices[12].pos, existing);
+    }
+
+    #[test]
+    fn a_logo_on_white_loses_its_background_and_margins() {
+        // 8x4 white with a 2x2 logo at (3, 1): black outline pixels and one light grey,
+        // which stays because the outline shuts it in.
+        let mut px = vec![255u8; 8 * 4 * 4];
+        let set = |px: &mut Vec<u8>, x: usize, y: usize, c: [u8; 4]| {
+            px[(y * 8 + x) * 4..(y * 8 + x) * 4 + 4].copy_from_slice(&c);
+        };
+        for (x, y) in [(3, 1), (4, 1), (3, 2)] {
+            set(&mut px, x, y, [0, 0, 0, 255]);
+        }
+        set(&mut px, 4, 2, [200, 200, 200, 255]);
+        let (w, h, out) = prepare_logo(8, 4, px, 512);
+        assert_eq!((w, h), (2, 2));
+        assert!(out.chunks(4).all(|p| p[3] == 255));
+        assert_eq!(&out[12..16], &[200, 200, 200, 255]);
+        // Wider than `max`: halved, each pixel the average of two.
+        let (w, h, _) = prepare_logo(8, 4, vec![9u8; 8 * 4 * 4], 4);
+        assert_eq!((w, h), (4, 2));
+    }
+
+    #[test]
+    fn a_row_too_wide_shrinks_into_the_screen_with_its_items_scissors() {
+        // The Thor's lower screen at scale 6: 207 wide. The 182-wide hotbar centered (from
+        // 12.5) with the 29-wide off-hand slot left of it spans -16.5..194.5: 211 for 203.
+        let (scale, dx) = fit_row(-16.5, 194.5, 207.0, 2.0);
+        assert!((scale - 203.0 / 211.0).abs() < 1e-6);
+        // Scaled about x 103.5, the row's middle (89) comes to 103.5: dx 14.5 * scale.
+        assert!((dx - 14.5 * 203.0 / 211.0).abs() < 1e-4);
+        // A row that fits stays put; one hanging over an edge moves back in.
+        assert_eq!(fit_row(12.5, 194.5, 207.0, 2.0), (1.0, 0.0));
+        assert_eq!(fit_row(-3.0, 150.0, 207.0, 2.0), (1.0, 5.0));
+        let mut batch = HudBatch::new([640, 480]);
+        batch.scale = 2.0;
+        batch.quad(
+            [[10.0, 10.0], [20.0, 10.0], [20.0, 20.0], [10.0, 20.0]],
+            [[0.0; 2]; 4],
+            u32::MAX,
+        );
+        batch.blends.push((0..6, Blend::Depth([20, 20, 20, 20])));
+        transform_since(&mut batch, 0, [0.0, 0.0], 0.5, [3.0, 1.0]);
+        assert_eq!(batch.vertices[0].pos, [8.0, 6.0]);
+        // The scissor, GUI 10..20 square, becomes 8..13 across and 6..11 down, at scale 2.
+        assert_eq!(batch.blends[0].1, Blend::Depth([16, 12, 10, 10]));
+    }
+
+    #[test]
+    fn dual_screen_bars_anchor_to_the_corners() {
+        // 1280x720: GUI scale 3, 427x240; the middle 213, the bars from 122 to 304.
+        let mut batch = HudBatch::new([1280, 720]);
+        assert_eq!((batch.width, batch.height), (427.0, 240.0));
+        let rect = |b: &mut HudBatch, [x0, y0, x1, y1]: [f32; 4]| {
+            b.quad(
+                [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+                [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                u32::MAX,
+            );
+        };
+        rect(&mut batch, [0.0, 12.0, 9.0, 17.0]); // 0: a boss bar
+        let band = batch.vertices.len();
+        rect(&mut batch, [122.0, 211.0, 304.0, 216.0]); // 1: the experience bar, h - 29
+        rect(&mut batch, [122.0, 201.0, 131.0, 210.0]); // 2: the first heart row, h - 39
+        rect(&mut batch, [122.0, 191.0, 131.0, 200.0]); // 3: a second heart row
+        rect(&mut batch, [295.0, 201.0, 304.0, 210.0]); // 4: the food row
+        rect(&mut batch, [210.0, 205.0, 216.0, 213.0]); // 5: the level number, h - 35
+        let armor = batch.vertices.len();
+        rect(&mut batch, [122.0, 181.0, 131.0, 190.0]); // 6: the armor row
+        let air = batch.vertices.len();
+        rect(&mut batch, [295.0, 191.0, 304.0, 200.0]); // 7: the air bubbles
+        let end = batch.vertices.len();
+        dual_screen_bars(&mut batch, band..end, armor..air, air..end, 0..band, 1.0);
+        let at = |quad: usize| {
+            let q = &batch.vertices[quad * 6..quad * 6 + 6];
+            let ((l, r), (t, b)) = (x_span(q).unwrap(), y_span(q).unwrap());
+            [l, t, r, b]
+        };
+        // Rows mirrored about y 217 (240 - 24 + 1). The bar stretched about 213 by 425 / 182:
+        // 91 * 425 / 182 = 212.5 each side.
+        assert_eq!(at(1), [0.5, 1.0, 425.5, 6.0]);
+        // The hearts to the left edge (122 - 1 to the left), the food to the right (426 - 304).
+        assert_eq!(at(2), [1.0, 7.0, 10.0, 16.0]);
+        assert_eq!(at(3), [1.0, 17.0, 10.0, 26.0]);
+        assert_eq!(at(4), [417.0, 7.0, 426.0, 16.0]);
+        // The level number stays in the middle, under the bar.
+        assert_eq!(at(5), [210.0, 4.0, 216.0, 12.0]);
+        // The armor and the air at the bottom corners, ending 1 above the bottom.
+        assert_eq!(at(6), [1.0, 230.0, 10.0, 239.0]);
+        assert_eq!(at(7), [417.0, 230.0, 426.0, 239.0]);
+        // The boss bar under the band (bottom 26), 2 lower.
+        assert_eq!(at(0), [0.0, 28.0, 9.0, 33.0]);
+        // Sprites keep their orientation: the top edge still has the texture's top.
+        let heart = &batch.vertices[12..18];
+        assert!(heart.iter().all(|v| (v.pos[1] == 7.0) == (v.uv[1] == 0.0)));
     }
 
     #[test]

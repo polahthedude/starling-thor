@@ -451,6 +451,18 @@ impl Game<'_> {
             }
             return Ok(());
         }
+        // A dual-screen handheld's second screen has its own menus (`second_screen`).
+        #[cfg(target_os = "android")]
+        if self.second_screen_pad(event_loop, button) {
+            // Held, a direction repeats (`second_screen_stick`).
+            if matches!(
+                button,
+                Button::DPadUp | Button::DPadDown | Button::DPadLeft | Button::DPadRight
+            ) {
+                self.pad.menu.repeat = Some((button, Instant::now(), false));
+            }
+            return Ok(());
+        }
         match button {
             Button::East | Button::Start => return self.pad_back(),
             Button::RightStick => {
@@ -750,6 +762,13 @@ impl Game<'_> {
             .map_or(0.0, |t| now.duration_since(t).as_secs_f32().min(0.05));
         self.pad.menu.last_poll = Some(now);
         self.key_focus_frame();
+        // The second screen's own layouts step on the D-pad and the stick: no pointer. Before
+        // the touch controls' check below: they show while these screens are up.
+        #[cfg(target_os = "android")]
+        if self.pad_in_menu() && self.second_screen_owns_pad() {
+            self.second_screen_stick(event_loop, now);
+            return;
+        }
         let keyboard_focus = {
             #[cfg(target_os = "android")]
             {
@@ -891,6 +910,35 @@ impl Game<'_> {
             self.pad_auto_keyboard();
         }
         self.pad_show_os_pointer(self.pad.menu.pos.is_none() || self.pad.menu.keyboard);
+    }
+
+    /// The left stick as the D-pad on the second screen's own layouts, and a held direction
+    /// (either) repeating, as the window's menus step.
+    #[cfg(target_os = "android")]
+    fn second_screen_stick(&mut self, event_loop: &dyn EventLoopCtl, now: Instant) {
+        let deadzone = self.settings.controller.move_deadzone;
+        let left = gamepad::radial(self.pad.state.left, deadzone);
+        let dir = gamepad::stick_direction(left, STICK_STEP);
+        if dir != self.pad.menu.stick {
+            self.pad.menu.stick = dir;
+            self.pad.menu.repeat = dir.map(|b| (b, now, false));
+            if let Some(button) = dir {
+                self.second_screen_pad(event_loop, button);
+            }
+        }
+        if let Some((button, since, repeating)) = self.pad.menu.repeat {
+            let wait = if repeating {
+                REPEAT_EVERY
+            } else {
+                REPEAT_DELAY
+            };
+            if now.duration_since(since).as_secs_f32() >= wait {
+                self.pad.menu.repeat = Some((button, now, true));
+                self.second_screen_pad(event_loop, button);
+            }
+        }
+        self.pad.menu.pos = None;
+        self.pad.menu.focus = None;
     }
 
     /// Focus mode, each poll: find the focused widget in the new frame (a
@@ -1482,6 +1530,15 @@ impl Game<'_> {
         #[cfg(not(target_os = "android"))]
         let virtual_mouse = false;
         if !self.pad_in_menu() && !virtual_mouse {
+            return;
+        }
+        // On a dual-screen handheld: drawn on the second screen with the menu it moved there
+        // (`second_screen_menu`), or not at all over its own layouts.
+        #[cfg(target_os = "android")]
+        if self.pad_in_menu()
+            && (self.second_screen_owns_pad()
+                || (self.screen_on_second_screen() && !super::second_screen::drawing_lower()))
+        {
             return;
         }
         if self.pad_in_menu()

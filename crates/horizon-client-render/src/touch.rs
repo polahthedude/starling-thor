@@ -167,6 +167,346 @@ pub fn hotbar_slot(width: f32, height: f32, point: [f32; 2]) -> Option<usize> {
     (point[1] >= height - 22.0 && point[1] < height && (0.0..180.0).contains(&x))
         .then(|| (x / 20.0) as usize)
 }
+/// A dual-screen handheld's lower screen, laid out after New 3DS Edition's touch screen, in GUI
+/// pixels: the hotbar along the top on a dark band, the coordinates on a dark strip under it,
+/// then a square map on the left and a column of three buttons (inventory, crafting, pause) on
+/// the right, together as tall as the map.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DualPanel {
+    /// The band's height: the 22-pixel hotbar, 1 pixel from the top.
+    pub band: f32,
+    pub coords: [f32; 4],
+    pub map: [f32; 4],
+    pub buttons: [[f32; 4]; 3],
+}
+/// About 200 GUI pixels across, so the hotbar spans the screen as on the 3DS.
+pub fn dual_panel_scale(width_px: u32) -> f32 {
+    (width_px as f32 / 200.0).round().max(1.0)
+}
+pub fn dual_panel(width: f32, height: f32) -> DualPanel {
+    const PAD: f32 = 6.0;
+    const GAP: f32 = 4.0;
+    let band = 24.0;
+    let coords = [0.0, band + 3.0, width, 12.0];
+    let top = coords[1] + coords[3] + PAD;
+    // The 3DS's buttons are about 0.38 of the width left beside the map.
+    let column = ((width - 3.0 * PAD) * 0.38).floor();
+    let side = (width - 3.0 * PAD - column)
+        .min(height - top - PAD)
+        .max(0.0)
+        .floor();
+    let button = ((side - 2.0 * GAP) / 3.0).floor();
+    let x = width - PAD - column;
+    DualPanel {
+        band,
+        coords,
+        map: [PAD, top, side, side],
+        buttons: std::array::from_fn(|i| [x, top + i as f32 * (button + GAP), column, button]),
+    }
+}
+/// The dual-screen inventory and crafting screens (a handheld's lower screen, after New 3DS
+/// Edition's), below the hotbar band of `dual_panel`, in GUI pixels: an 18-pixel slot grid over
+/// a row of tabs, the crafting categories from the left and the inventory's at the right end.
+pub mod dual_menu {
+    pub const SLOT: f32 = 18.0;
+    pub const TAB: f32 = 22.0;
+    /// The slots of the inventory tab, by the game's slot numbers: the armor (500 to 503) and
+    /// off-hand (504) row, then the 27 slots of the main inventory (9 to 35); each its 18-pixel
+    /// square's top left.
+    pub fn inventory(width: f32, top: f32) -> Vec<(usize, [f32; 2])> {
+        let mut out = Vec::with_capacity(32);
+        // Four armor slots, a gap, the off-hand slot.
+        let row = 5.0 * SLOT + 6.0;
+        let x = ((width - row) / 2.0).floor();
+        let y = top + 4.0;
+        for i in 0..4 {
+            out.push((500 + i, [x + i as f32 * SLOT, y]));
+        }
+        out.push((504, [x + 4.0 * SLOT + 6.0, y]));
+        let x = ((width - 9.0 * SLOT) / 2.0).floor();
+        for i in 0..27 {
+            let (c, r) = ((i % 9) as f32, (i / 9) as f32);
+            out.push((9 + i, [x + c * SLOT, y + SLOT + 6.0 + r * SLOT]));
+        }
+        out
+    }
+    /// The side of the tab bar's square tabs: `tabs` category tabs and the inventory's across
+    /// `width`, 1 apart with 4 more before the inventory's, at most `TAB`.
+    pub fn tab_size(width: f32, tabs: usize) -> f32 {
+        ((width - 12.0 - tabs as f32) / (tabs + 1) as f32)
+            .floor()
+            .min(TAB)
+    }
+    /// The largest GUI scale up to the panel's (`dual_panel_scale`) at which `tabs` tabs and
+    /// the inventory's are wide enough to hold an item's icon in a frame (18).
+    pub fn tab_scale(width_px: u32, tabs: usize) -> f32 {
+        let mut scale = super::dual_panel_scale(width_px);
+        while scale > 1.0 && tab_size((width_px as f32 / scale).ceil(), tabs) < 18.0 {
+            scale -= 1.0;
+        }
+        scale
+    }
+    /// The tab bar along the bottom: `tabs` square category tabs from the left, then the
+    /// inventory's at the right end, all `tab_size`.
+    pub fn tabs(width: f32, height: f32, tabs: usize) -> (Vec<[f32; 4]>, [f32; 4]) {
+        let size = tab_size(width, tabs);
+        let y = height - size - 2.0;
+        let categories = (0..tabs)
+            .map(|i| [4.0 + i as f32 * (size + 1.0), y, size, size])
+            .collect();
+        (categories, [width - 4.0 - size, y, size, size])
+    }
+    /// The creative screen's item grid: 9 columns of slots under the tab's title, as many rows
+    /// as fit above `bottom`, and a scrollbar beside them (its up arrow, track, down arrow).
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Grid {
+        pub title: [f32; 4],
+        pub origin: [f32; 2],
+        pub rows: usize,
+        pub up: [f32; 4],
+        pub track: [f32; 4],
+        pub down: [f32; 4],
+    }
+    pub fn grid(width: f32, top: f32, bottom: f32) -> Grid {
+        const BAR: f32 = 12.0;
+        let title = [0.0, top + 3.0, width, 10.0];
+        let y = top + 16.0;
+        let rows = (((bottom - y - 2.0) / SLOT).floor() as usize).max(1);
+        let x = ((width - (9.0 * SLOT + 4.0 + BAR)) / 2.0).floor();
+        let bx = x + 9.0 * SLOT + 4.0;
+        let h = rows as f32 * SLOT;
+        Grid {
+            title,
+            origin: [x, y],
+            rows,
+            up: [bx, y, BAR, BAR],
+            track: [bx, y + BAR, BAR, h - 2.0 * BAR],
+            down: [bx, y + h - BAR, BAR, BAR],
+        }
+    }
+    /// The title screen's buttons on the lower screen: Singleplayer and Multiplayer across it,
+    /// a column of Options, Realms and Quit at the right with the Friends, Language and
+    /// Accessibility icons under it, and the player at the left of the column.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct TitleMenu {
+        pub wide: [[f32; 4]; 2],
+        pub column: [[f32; 4]; 3],
+        pub icons: [[f32; 4]; 3],
+        /// The player's box (`draw_player_preview`'s).
+        pub doll: [f32; 4],
+    }
+    pub fn title_menu(width: f32, height: f32) -> TitleMenu {
+        const M: f32 = 6.0;
+        let wide_w = width - 2.0 * M;
+        let cw = (wide_w * 0.5).floor();
+        let cx = width - M - cw;
+        let ix = cx + ((cw - 68.0) / 2.0).floor();
+        TitleMenu {
+            wide: [[M, 8.0, wide_w, 20.0], [M, 32.0, wide_w, 20.0]],
+            column: std::array::from_fn(|i| [cx, 58.0 + i as f32 * 24.0, cw, 20.0]),
+            icons: std::array::from_fn(|i| [ix + i as f32 * 24.0, 130.0, 20.0, 20.0]),
+            doll: [M, 58.0, cx - 2.0 * M, height - 58.0 - 4.0],
+        }
+    }
+    /// The pause menu on the lower screen, after New 3DS Edition's: a title bar, then `n`
+    /// buttons in one centered column, shorter than 20 when they wouldn't fit.
+    pub fn pause_menu(width: f32, height: f32, n: usize) -> ([f32; 4], Vec<[f32; 4]>) {
+        let title = [0.0, 0.0, width, 16.0];
+        let h = ((height - 26.0) / n.max(1) as f32 - 3.0).floor().min(20.0);
+        let w = (width - 40.0).min(200.0);
+        let x = ((width - w) / 2.0).floor();
+        let buttons = (0..n)
+            .map(|i| [x, 22.0 + i as f32 * (h + 3.0), w, h])
+            .collect();
+        (title, buttons)
+    }
+    /// The world list on the lower screen, after New 3DS Edition's: a header bar (its Delete
+    /// button at the right), then one row per world and a last one to create a world, each 32
+    /// tall, the worlds' with an edit button beside them, and a scrollbar at the right.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct WorldList {
+        pub header: [f32; 4],
+        pub delete: [f32; 4],
+        /// Where the rows show (they are clipped to it).
+        pub list: [f32; 4],
+        /// The rows in sight: (index, row, edit button); the last index is Create New's,
+        /// whose row spans the edit button's place too.
+        pub rows: Vec<(usize, [f32; 4], [f32; 4])>,
+        pub track: [f32; 4],
+    }
+    pub const WORLD_ROW: f32 = 34.0;
+    pub fn world_list(width: f32, height: f32, count: usize, scroll: f32) -> WorldList {
+        let header = [0.0, 0.0, width, 18.0];
+        let list = [4.0, 22.0, width - 8.0, height - 26.0];
+        let track = [width - 14.0, 24.0, 10.0, height - 30.0];
+        let (x, edit_w) = (8.0, 26.0);
+        let row_w = track[0] - 4.0 - x - edit_w - 2.0;
+        let rows = (0..count)
+            .filter_map(|i| {
+                let y = 24.0 + i as f32 * WORLD_ROW - scroll;
+                let shown = y + WORLD_ROW > list[1] && y < list[1] + list[3];
+                let last = i + 1 == count;
+                let w = if last { row_w + 2.0 + edit_w } else { row_w };
+                shown.then_some((i, [x, y, w, 32.0], [x + row_w + 2.0, y, edit_w, 32.0]))
+            })
+            .collect();
+        WorldList {
+            header,
+            delete: [width - 48.0, 2.0, 44.0, 14.0],
+            list,
+            rows,
+            track,
+        }
+    }
+    /// How far the world list scrolls: its rows past what the list shows.
+    pub fn world_list_scroll_max(height: f32, count: usize) -> f32 {
+        (count as f32 * WORLD_ROW + 4.0 - (height - 26.0)).max(0.0)
+    }
+    /// Legacy Console Edition's crafting tabs, in its order.
+    pub const LEGACY_TABS: [&str; 7] = [
+        "Structures",
+        "Tools & Weapons",
+        "Food",
+        "Armour",
+        "Mechanisms",
+        "Transport",
+        "Decoration",
+    ];
+    /// The Legacy tab a recipe goes in, by its result's id, Java's recipe book category
+    /// (`crafting_redstone`, `crafting_equipment`...) and whether the result is eaten. Today's
+    /// items get the tab their kind had there; what Legacy never had falls back on Java's
+    /// category, and blocks and materials on Structures.
+    pub fn legacy_tab(item: &str, category: &str, food: bool) -> usize {
+        let path = item.rsplit(':').next().unwrap_or(item);
+        let has = |parts: &[&str]| parts.iter().any(|p| path.contains(p));
+        let ends = |parts: &[&str]| parts.iter().any(|p| path.ends_with(p));
+        // `_raft`: bamboo rafts, not the crafting table.
+        if has(&["rail", "minecart", "boat", "_raft", "saddle"]) || ends(&["_on_a_stick"]) {
+            5
+        } else if ends(&["_helmet", "_chestplate", "_leggings", "_boots", "shield"])
+            || has(&["horse_armor", "wolf_armor"])
+        {
+            3
+        } else if food || ends(&["cake", "sugar"]) {
+            2
+        } else if category.contains("redstone") {
+            4
+        } else if category.contains("equipment")
+            || has(&[
+                "compass",
+                "clock",
+                "fishing_rod",
+                "flint_and_steel",
+                "shears",
+                "bucket",
+                "lead",
+                "spyglass",
+                "brush",
+                "arrow",
+                "map",
+                "bundle",
+            ])
+        {
+            1
+        } else if has(&[
+            "carpet",
+            "banner",
+            "_bed",
+            "painting",
+            "item_frame",
+            "flower_pot",
+            "sign",
+            "candle",
+            "lantern",
+            "torch",
+            "armor_stand",
+            "pane",
+            "decorated_pot",
+            "campfire",
+            "_dye",
+            "end_rod",
+            "chain",
+            "bookshelf",
+            "jukebox",
+            "firework",
+        ]) {
+            6
+        } else {
+            0
+        }
+    }
+    /// Legacy Console Edition's crafting row: the recipe groups of a tab in one row, the
+    /// selected one in a larger cell with its other variants above and below it, arrows at
+    /// the ends.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Carousel {
+        /// The tab's name and the count held of the selected result.
+        pub header: [f32; 4],
+        /// The visible groups' cells.
+        pub cells: Vec<[f32; 4]>,
+        pub left: [f32; 4],
+        pub right: [f32; 4],
+        /// The previous and next variant of the selected group (relative to its cell).
+        pub up: [f32; 4],
+        pub down: [f32; 4],
+    }
+    /// `visible` cells of 20 pixels, 2 apart, the selected one (`selected`, 0-based among the
+    /// visible) 24 wide; the variant cells 16 square above and below it.
+    pub fn carousel(width: f32, top: f32, visible: usize, selected: usize) -> Carousel {
+        const CELL: f32 = 20.0;
+        const BIG: f32 = 24.0;
+        const GAP: f32 = 2.0;
+        const ARROW: f32 = 12.0;
+        let header = [6.0, top + 3.0, width - 12.0, 10.0];
+        let row = top + 16.0 + 18.0;
+        let n = visible.max(1);
+        let span = (n - 1) as f32 * (CELL + GAP) + BIG;
+        let mut x = ((width - span) / 2.0).floor();
+        let mut cells = Vec::with_capacity(n);
+        let mut chosen = [0.0; 4];
+        for i in 0..n {
+            let size = if i == selected { BIG } else { CELL };
+            let cell = [x, row + (BIG - size) / 2.0, size, size];
+            if i == selected {
+                chosen = cell;
+            }
+            cells.push(cell);
+            x += size + GAP;
+        }
+        let mid = row + BIG / 2.0;
+        let left = [2.0, mid - ARROW / 2.0, ARROW, ARROW];
+        let right = [width - 2.0 - ARROW, mid - ARROW / 2.0, ARROW, ARROW];
+        let [cx, cy, cw, ch] = chosen;
+        let small = 16.0;
+        let sx = cx + (cw - small) / 2.0;
+        Carousel {
+            header,
+            cells,
+            left,
+            right,
+            up: [sx, cy - small - 2.0, small, small],
+            down: [sx, cy + ch + 2.0, small, small],
+        }
+    }
+    /// How many cells fit across, arrows and margins aside.
+    pub fn carousel_fits(width: f32) -> usize {
+        (((width - 2.0 * 16.0 - 4.0 + 2.0) / 22.0).floor() as usize).max(1)
+    }
+    /// The first group shown of `count` in `visible` cells, keeping `selected` near the
+    /// middle.
+    pub fn window(selected: usize, count: usize, visible: usize) -> usize {
+        if count <= visible {
+            return 0;
+        }
+        selected.saturating_sub(visible / 2).min(count - visible)
+    }
+}
+/// The rect `point` is in.
+pub fn rect_at(rects: &[[f32; 4]], point: [f32; 2]) -> Option<usize> {
+    rects
+        .iter()
+        .position(|&[x, y, w, h]| (x..x + w).contains(&point[0]) && (y..y + h).contains(&point[1]))
+}
 #[derive(Clone, Copy)]
 enum Role {
     Move([f32; 2]),
@@ -2809,6 +3149,160 @@ mod tests {
             );
         }
         assert_eq!(hotbar_slot(427.0, 240.0, [320.0, 230.0]), None);
+    }
+    #[test]
+    fn dual_menu_lays_out_the_3ds_inventory_and_a_legacy_crafting_row() {
+        use super::dual_menu::*;
+        // 207 wide (the Thor's lower screen at scale 6), below the 24-pixel hotbar band.
+        let slots = inventory(207.0, 24.0);
+        assert_eq!(slots.len(), 32);
+        // Armor and off-hand: 96 wide (5 slots and a 6 gap) from x 55, at y 28.
+        assert_eq!(slots[0], (500, [55.0, 28.0]));
+        assert_eq!(slots[4], (504, [133.0, 28.0]));
+        // The inventory grid, 162 wide from x 22, 24 lower (a slot and a 6 gap).
+        assert_eq!(slots[5], (9, [22.0, 52.0]));
+        assert_eq!(slots[31], (35, [166.0, 88.0]));
+        let (categories, inventory_tab) = tabs(207.0, 180.0, 4);
+        assert_eq!(categories[1], [27.0, 156.0, 22.0, 22.0]);
+        assert_eq!(inventory_tab, [181.0, 156.0, 22.0, 22.0]);
+        // (207 - 36 + 2) / 22: 7 cells; seven, the middle one 24 wide: 6 * 22 + 24 = 156.
+        assert_eq!(carousel_fits(207.0), 7);
+        let row = carousel(207.0, 24.0, 7, 3);
+        assert_eq!(row.cells[0], [25.0, 60.0, 20.0, 20.0]);
+        assert_eq!(row.cells[3], [91.0, 58.0, 24.0, 24.0]);
+        assert_eq!(row.up, [95.0, 40.0, 16.0, 16.0]);
+        assert_eq!(row.down, [95.0, 84.0, 16.0, 16.0]);
+        // The window keeps the selected group in the middle, and stops at the ends.
+        assert_eq!(window(0, 20, 7), 0);
+        assert_eq!(window(10, 20, 7), 7);
+        assert_eq!(window(19, 20, 7), 13);
+        assert_eq!(window(3, 5, 7), 0);
+    }
+
+    #[test]
+    fn legacy_tabs_sort_todays_recipes_as_legacy_console_edition_did() {
+        use super::dual_menu::legacy_tab;
+        let tab = |item, category, food| legacy_tab(item, category, food);
+        // Structures: blocks and materials.
+        assert_eq!(
+            tab("minecraft:oak_planks", "crafting_building_blocks", false),
+            0
+        );
+        assert_eq!(tab("minecraft:stick", "crafting_misc", false), 0);
+        assert_eq!(tab("minecraft:crafting_table", "crafting_misc", false), 0);
+        // Tools & Weapons, Armour.
+        assert_eq!(
+            tab("minecraft:iron_pickaxe", "crafting_equipment", false),
+            1
+        );
+        assert_eq!(tab("minecraft:compass", "crafting_misc", false), 1);
+        assert_eq!(
+            tab("minecraft:diamond_chestplate", "crafting_equipment", false),
+            3
+        );
+        assert_eq!(tab("minecraft:shield", "crafting_equipment", false), 3);
+        // Food, eaten or not.
+        assert_eq!(tab("minecraft:bread", "crafting_misc", true), 2);
+        assert_eq!(tab("minecraft:cake", "crafting_misc", false), 2);
+        // Mechanisms; rails and minecarts are Transport whatever Java calls them.
+        assert_eq!(
+            tab("minecraft:copper_button", "crafting_redstone", false),
+            4
+        );
+        assert_eq!(tab("minecraft:oak_door", "crafting_redstone", false), 4);
+        assert_eq!(tab("minecraft:powered_rail", "crafting_redstone", false), 5);
+        assert_eq!(
+            tab("minecraft:cherry_chest_boat", "crafting_misc", false),
+            5
+        );
+        assert_eq!(tab("minecraft:bamboo_raft", "crafting_misc", false), 5);
+        // Decoration.
+        assert_eq!(tab("minecraft:white_carpet", "crafting_misc", false), 6);
+        assert_eq!(tab("minecraft:oak_hanging_sign", "crafting_misc", false), 6);
+        assert_eq!(tab("minecraft:soul_lantern", "crafting_misc", false), 6);
+    }
+
+    #[test]
+    fn title_and_pause_menus_fit_the_lower_screen() {
+        use super::dual_menu::{pause_menu, title_menu};
+        // The Thor at scale 6: 207x180. Wide buttons 195 across; the column half of that
+        // (97) at the right, from x 104; the icons centered under it from 118.
+        let t = title_menu(207.0, 180.0);
+        assert_eq!(t.wide[1], [6.0, 32.0, 195.0, 20.0]);
+        assert_eq!(t.column[2], [104.0, 106.0, 97.0, 20.0]);
+        assert_eq!(t.icons[0], [118.0, 130.0, 20.0, 20.0]);
+        assert_eq!(t.doll, [6.0, 58.0, 92.0, 118.0]);
+        // Seven buttons in 180 - 26: 22 each, 19 tall with their 3 gap; 167 wide from 20.
+        let (_, buttons) = pause_menu(207.0, 180.0, 7);
+        assert_eq!(buttons[0], [20.0, 22.0, 167.0, 19.0]);
+        assert_eq!(buttons[6], [20.0, 154.0, 167.0, 19.0]);
+        // Few buttons keep vanilla's 20.
+        assert_eq!(pause_menu(207.0, 180.0, 4).1[1], [20.0, 45.0, 167.0, 20.0]);
+    }
+
+    #[test]
+    fn world_list_rows_scroll_under_the_header() {
+        use super::dual_menu::{world_list, world_list_scroll_max};
+        // The Thor at scale 6: 207x180. The track at 193; rows from x 8, 153 wide (193 - 4
+        // - 8 - 26 - 2), the edit button after them; rows every 34 from y 24.
+        let l = world_list(207.0, 180.0, 3, 0.0);
+        assert_eq!(
+            l.rows[0],
+            (0, [8.0, 24.0, 153.0, 32.0], [163.0, 24.0, 26.0, 32.0])
+        );
+        // The last row (Create New) takes the edit button's place too.
+        assert_eq!(l.rows[2].1, [8.0, 92.0, 181.0, 32.0]);
+        // Ten rows (340 + 4) in a 154-tall list: 190 to scroll. Scrolled 100, the first
+        // row in sight is the third (24 + 68 - 100 = -8, still reaching into the list).
+        assert_eq!(world_list_scroll_max(180.0, 10), 190.0);
+        assert_eq!(world_list(207.0, 180.0, 10, 100.0).rows[0].0, 2);
+    }
+
+    #[test]
+    fn creative_grid_fills_the_lower_screen_with_a_scrollbar() {
+        use super::dual_menu::grid;
+        // The Thor at scale 6: between the 24 band and the tab bar at 156, 6 rows from y 40.
+        let g = grid(207.0, 24.0, 154.0);
+        assert_eq!(g.rows, 6);
+        // 9 slots, a 4 gap and the 12 bar: 178 wide, from x 14; the bar at 180.
+        assert_eq!(g.origin, [14.0, 40.0]);
+        assert_eq!(g.up, [180.0, 40.0, 12.0, 12.0]);
+        assert_eq!(g.track, [180.0, 52.0, 12.0, 84.0]);
+        assert_eq!(g.down, [180.0, 136.0, 12.0, 12.0]);
+        // Ten tabs and the inventory's narrow to 16 squares to fit: (207 - 12 - 10) / 11.
+        let (tabs, inventory) = super::dual_menu::tabs(207.0, 180.0, 10);
+        assert_eq!(tabs[9], [157.0, 162.0, 16.0, 16.0]);
+        assert_eq!(inventory, [187.0, 162.0, 16.0, 16.0]);
+        // Too small for an icon's frame at the Thor's panel scale (6, 1240 wide): 5, where
+        // (248 - 22) / 11 is 20.
+        assert_eq!(super::dual_menu::tab_scale(1240, 10), 5.0);
+        assert_eq!(super::dual_menu::tab_size(248.0, 10), 20.0);
+        // Seven crafting tabs fit at 6: (207 - 19) / 8 is 23, kept to 22.
+        assert_eq!(super::dual_menu::tab_scale(1240, 7), 6.0);
+    }
+
+    #[test]
+    fn dual_panel_follows_the_3ds_touch_screen_on_the_thor() {
+        // The AYN Thor's lower screen, 1240x1080: scale 6, 207x180 GUI pixels.
+        assert_eq!(dual_panel_scale(1240), 6.0);
+        let panel = dual_panel(207.0, 180.0);
+        // Coordinates under the 24-pixel hotbar band; below them, from y 45: the map, 118
+        // square (207 - 3 * 6 - 71 wide, under 180 - 45 - 6 tall), beside a 71-wide column
+        // ((207 - 18) * 0.38) of three 36-tall buttons with 4-pixel gaps.
+        assert_eq!(panel.coords, [0.0, 27.0, 207.0, 12.0]);
+        assert_eq!(panel.map, [6.0, 45.0, 118.0, 118.0]);
+        assert_eq!(
+            panel.buttons,
+            [
+                [130.0, 45.0, 71.0, 36.0],
+                [130.0, 85.0, 71.0, 36.0],
+                [130.0, 125.0, 71.0, 36.0]
+            ]
+        );
+        assert_eq!(rect_at(&panel.buttons, [150.0, 100.0]), Some(1));
+        assert_eq!(rect_at(&panel.buttons, [150.0, 122.0]), None);
+        // A short screen: the map shrinks to the height left.
+        assert_eq!(dual_panel(207.0, 120.0).map[3], 69.0);
     }
     #[test]
     fn old_profiles_keep_custom_layouts_and_new_preferences_have_safe_defaults() {

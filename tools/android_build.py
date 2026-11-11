@@ -102,6 +102,7 @@ def main():
     parser.add_argument('--build-tools-version', help='Select an installed Android build-tools version explicitly')
     parser.add_argument('--skip-rust', action='store_true')
     parser.add_argument('--rust-only', action='store_true', help='Build the Rust host without touching shared APK staging')
+    parser.add_argument('--stage-only', action='store_true', help="Build and stage the library and assets, then stop: Gradle packages them (Android Studio's Run)")
     parser.add_argument('--release-candidate', action='store_true', help='Build a non-debuggable candidate and audit privacy; this does not authorize redistribution of bundled game resources')
     parser.add_argument('--public', action='store_true', help='Distribution APK: generated tables only; original resources download from Mojang')
     parser.add_argument('--dev-build', help='Public, non-debuggable dev channel label (separate .dev package)')
@@ -145,7 +146,8 @@ def main():
     features = ['--no-default-features', '--features', 'audio'] if legacy else []
     manifests = [(['-p', 'horizon-android'], features)]
     environment = dict(os.environ)
-    environment['PATH'] = os.pathsep.join([str(ndk / 'bin'), str(args.java_home / 'bin'), environment['PATH']])
+    # rustup's cargo too: an IDE started before Rust was installed lacks it on its PATH.
+    environment['PATH'] = os.pathsep.join([str(ndk / 'bin'), str(args.java_home / 'bin'), str(Path.home() / '.cargo/bin'), environment['PATH']])
     environment['JAVA_HOME'] = str(args.java_home)
     target_dir = Path(environment.get('CARGO_TARGET_DIR', ROOT / 'target')).resolve()
     environment['CARGO_TARGET_DIR'] = str(target_dir)
@@ -213,9 +215,17 @@ def main():
         (assets / 'bedrock-controls.zip').unlink(missing_ok=True)
     else:
         shutil.copyfile(controls, assets / 'bedrock-controls.zip')
+    # The player's own title logo (private, never committed): local builds only.
+    logo = ROOT / '.local/android/title-logo.png'
+    if not args.public and logo.is_file():
+        shutil.copyfile(logo, assets / 'title-logo.png')
+    else:
+        (assets / 'title-logo.png').unlink(missing_ok=True)
     key = ROOT / '.local/android/debug.keystore'
     if not key.exists():
         run([args.java_home / 'bin' / ('keytool' + suffix), '-genkeypair', '-keystore', key, '-storepass', 'android', '-keypass', 'android', '-alias', 'androiddebugkey', '-keyalg', 'RSA', '-validity', '3650', '-dname', 'CN=Horizon Android Development'])
+    if args.stage_only:
+        return
     gradle = args.gradle
     if gradle is None:
         candidates = list((Path.home() / '.gradle/wrapper/dists/gradle-8.14-all').glob('*/gradle-8.14/bin/gradle' + ('.bat' if os.name == 'nt' else '')))
@@ -226,7 +236,7 @@ def main():
     variant = 'release' if args.release_candidate else 'debug'
     dev_properties = (['-PappId=dev.horizon.android.dev', '-PdevBuild=' + args.dev_build,
                        '-PdevVersionCode=' + str(args.dev_version_code)] if args.dev_build else [])
-    run([gradle, '--no-daemon', '-p', ROOT / 'packaging/android', '-Pabi=' + args.abi, '-PminSdk=' + str(min_sdk), *dev_properties, 'assemble' + variant.title()], cwd=ROOT, env=environment)
+    run([gradle, '--no-daemon', '-p', ROOT / 'packaging/android', '-PskipNative=true', '-Pabi=' + args.abi, '-PminSdk=' + str(min_sdk), *dev_properties, 'assemble' + variant.title()], cwd=ROOT, env=environment)
     apk = output / ('horizon-android-public.apk' if args.public else 'horizon-android-release.apk' if args.release_candidate else 'horizon-android.apk')
     shutil.copyfile(ROOT / f'.local/android/gradle-build/outputs/apk/{variant}/HorizonAndroid-{variant}.apk', apk)
     # Invoke the signing JAR directly so Windows does not need a batch-file shell.

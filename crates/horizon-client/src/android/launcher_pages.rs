@@ -303,6 +303,7 @@ pub(super) enum Action {
     Dismiss,
     Immersive,
     Cutout,
+    SecondScreen,
     Aspect,
     ChooseAspect(crate::display::Aspect),
     DisplayHz,
@@ -3918,7 +3919,7 @@ impl Launcher {
         match cat {
             SettingsCategory::Video => {
                 let c = &self.catalog.config;
-                let count = 17;
+                let count = 18;
                 let extra_ime = if ime_top_dp.is_some() { 180.0 } else { 0.0 };
                 let max_scroll =
                     (count as f32 * step_y + extra_ime - (list_bottom - list_top)).max(0.0);
@@ -3955,7 +3956,7 @@ impl Launcher {
                 };
                 let game_anim_off = c.disable_game_animations || touch_cfg.disable_game_animations;
 
-                let rows: [(&str, &str, SettingControl<'_>); 17] = [
+                let rows: [(&str, &str, SettingControl<'_>); 18] = [
                     (
                         "DISPLAY, RESOLUTION & RENDERER PIPELINE",
                         "Hardware GPU backend, 3D resolution scale, refresh rate & display geometry",
@@ -4010,6 +4011,11 @@ impl Launcher {
                         "Avoid camera cutout / notch",
                         "Inset HUD away from punch-hole cameras and curved display edges",
                         SettingControl::Toggle(c.screen.avoid_cutout, Action::Cutout),
+                    ),
+                    (
+                        "Second screen",
+                        "Use the lower display of dual-screen handhelds (experimental)",
+                        SettingControl::Toggle(c.screen.second_screen, Action::SecondScreen),
                     ),
                     (
                         "IN-GAME GRAPHICS, DISTANCES & MOTION",
@@ -5927,6 +5933,11 @@ impl Launcher {
             }
             Some(Action::Cutout) => {
                 self.catalog.config.screen.avoid_cutout ^= true;
+                self.catalog.config.save(&self.home)?;
+                self.configure_screen();
+            }
+            Some(Action::SecondScreen) => {
+                self.catalog.config.screen.second_screen ^= true;
                 self.catalog.config.save(&self.home)?;
                 self.configure_screen();
             }

@@ -1,5 +1,8 @@
 plugins { id 'com.android.application' version '8.11.1' }
 
+// tools/android_build.py passes the ABI; Android Studio's Run builds for 64-bit ARM phones.
+def abi = providers.gradleProperty('abi').getOrElse('arm64-v8a')
+
 android {
     namespace 'dev.horizon.android'
     compileSdk 35
@@ -9,7 +12,7 @@ android {
         targetSdk 35
         versionCode providers.gradleProperty('devVersionCode').getOrElse('30').toInteger()
         versionName '0.7.8' + (providers.gradleProperty('devVersionCode').isPresent() ? '-dev.' + providers.gradleProperty('devBuild').get() : '')
-        ndk { abiFilters providers.gradleProperty('abi').get() }
+        ndk { abiFilters abi }
     }
     signingConfigs {
         development {
@@ -44,3 +47,16 @@ android {
     packaging { jniLibs { useLegacyPackaging = true; keepDebugSymbols += '**/*.so' } }
 }
 layout.buildDirectory = file('../../.local/android/gradle-build')
+
+// Android Studio's Run: build the Rust library and stage it with the assets before packaging.
+// tools/android_build.py has already done so when it runs Gradle (-PskipNative).
+def stageNative = tasks.register('stageNative', Exec) {
+    workingDir file('../..')
+    commandLine providers.gradleProperty('python').getOrElse(
+            System.getProperty('os.name').startsWith('Windows') ? 'python' : 'python3'),
+        'tools/android_build.py', '--stage-only', '--abi', abi,
+        '--sdk', android.sdkDirectory, '--java-home', System.getProperty('java.home')
+}
+if (!providers.gradleProperty('skipNative').isPresent()) {
+    tasks.named('preBuild') { dependsOn stageNative }
+}

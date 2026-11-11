@@ -193,6 +193,9 @@ pub struct ScreenPreferences {
     pub immersive: bool,
     pub avoid_cutout: bool,
     pub aspect: Aspect,
+    /// Draw on a dual-screen handheld's second display (`second_screen.rs`). Off: the
+    /// device keeps showing its own content there.
+    pub second_screen: bool,
 }
 impl Default for ScreenPreferences {
     fn default() -> Self {
@@ -202,6 +205,7 @@ impl Default for ScreenPreferences {
             immersive: false,
             avoid_cutout: false,
             aspect: Aspect::Native,
+            second_screen: false,
         }
     }
 }

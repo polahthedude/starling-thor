@@ -30,6 +30,19 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+thread_local! {
+    /// The player's skin and slimness for a preview without a world: last seen in one, or
+    /// the account's on the title screen (`set_preview_skin`).
+    static LAST_SKIN: std::cell::RefCell<Option<(String, bool)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The skin a player preview without a world wears (an atlas sprite).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(super) fn set_preview_skin(skin: String, slim: bool) {
+    LAST_SKIN.set(Some((skin, slim)));
+}
+
 /// `Level.clip` with `ClipContext.Block.VISUAL` and no fluids:
 /// `BlockBehaviour.getVisualShape` is the collision shape except for the
 /// blocks that override it.
@@ -689,8 +702,39 @@ impl Game<'_> {
         size: f32,
         offset_y: f32,
     ) {
-        let Some(m) = self.player_model.as_ref() else {
-            return;
+        self.draw_player_turned(batch, [x0, y0, x1, y1], size, offset_y, None);
+    }
+    /// [`Self::draw_player_preview`], or with `yaw` turned that many degrees from facing out
+    /// and looking straight ahead (the dual screen's player, which a swipe spins). Without a
+    /// world (the title screen) the player is drawn as last seen this session (its skin), or
+    /// with the default skin.
+    pub(super) fn draw_player_turned(
+        &self,
+        batch: &mut HudBatch,
+        [x0, y0, x1, y1]: [f32; 4],
+        size: f32,
+        offset_y: f32,
+        yaw: Option<f32>,
+    ) {
+        let mut m = match self.player_model.as_ref() {
+            Some(m) => {
+                if let Some(skin) = &m.skin {
+                    LAST_SKIN.set(Some((skin.clone(), m.slim)));
+                }
+                m.clone()
+            }
+            None if yaw.is_some() => {
+                let Some(kind) = self.res.player_type().clone() else {
+                    return;
+                };
+                let mut m = Mob::new(0, kind, Vec3::new(0.0, 0.0, 0.0), 0.0);
+                if let Some((skin, slim)) = LAST_SKIN.with_borrow(Clone::clone) {
+                    m.skin = Some(skin);
+                    m.slim = slim;
+                }
+                m
+            }
+            None => return,
         };
         if self
             .player
@@ -700,15 +744,19 @@ impl Game<'_> {
             return;
         }
         let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-        let x_angle = ((cx - self.cursor.0) / 40.0).atan();
-        let y_angle = ((cy - self.cursor.1) / 40.0).atan();
-        let mut m = m.clone();
+        let (x_angle, y_angle) = match yaw {
+            Some(_) => (0.0, 0.0),
+            None => (
+                ((cx - self.cursor.0) / 40.0).atan(),
+                ((cy - self.cursor.1) / 40.0).atan(),
+            ),
+        };
         // `extractEntityInInventory` divides the size by the entity's scale: the
         // preview is the same size whatever the player's scale.
         m.extra.model_scale = 0.0;
         // The render state: still, facing out, the head toward the cursor.
         m.previous = m.position;
-        m.body_yaw = 180.0 + x_angle * 20.0;
+        m.body_yaw = 180.0 + yaw.unwrap_or(x_angle * 20.0);
         m.previous_body_yaw = m.body_yaw;
         m.head_yaw = m.body_yaw + x_angle * 20.0;
         m.previous_head_yaw = m.head_yaw;

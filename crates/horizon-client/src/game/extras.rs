@@ -133,6 +133,11 @@ impl Game<'_> {
         }
         Ok(())
     }
+    /// The minimap image is composed (in the atlas's `MINIMAP_SPRITE`).
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(super) fn minimap_ready(&self) -> bool {
+        !self.extras.minimap.image.is_empty()
+    }
     /// The minimap a mod shows (`render.set-minimap`): its corner, its side
     /// in GUI pixels and its view of the player.
     fn minimap_shown(&self) -> Option<(Corner, f32, View)> {
@@ -157,7 +162,17 @@ impl Game<'_> {
         if let Some(m) = self.native_minimap_now() {
             return Some(m);
         }
-        let m = self.mod_minimap()?;
+        let Some(m) = self.mod_minimap() else {
+            // A dual-screen handheld's lower screen shows the map, as New 3DS Edition's touch
+            // screen does (`second_screen.rs`); size 0: nothing in a corner of the window.
+            return super::hotbar::dual_screen().then_some(NativeMinimap {
+                corner: Corner::TopLeft,
+                size: 0.0,
+                blocks_per_pixel: 1.0,
+                rotate: false,
+                round: false,
+            });
+        };
         Some(NativeMinimap {
             corner: m.corner,
             size: m.size,
@@ -257,6 +272,7 @@ impl Game<'_> {
         corners.reserve(Corner::TopLeft, 26.0);
         let atlas = &self.gui.atlas;
         if let Some((map_corner, map_size, view)) = map
+            && map_size > 0.0
             && visible(map_corner)
             && !self.extras.minimap.image.is_empty()
             && let Some(image) = atlas.sprites.get(MINIMAP_SPRITE).copied()

@@ -1454,9 +1454,10 @@ impl Game<'_> {
                 }
             }
             Gesture::Scroll(y) if self.screen == Screen::Options => {
+                let size = self.options_size();
                 self.ui
                     .options
-                    .touch_scroll(&self.settings, (b.width, b.height), (p[0], p[1]), y);
+                    .touch_scroll(&self.settings, size, (p[0], p[1]), y);
             }
             Gesture::Scroll(y) => self.handle_window_event(
                 events,

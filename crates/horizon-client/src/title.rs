@@ -93,6 +93,12 @@ fn recover_issues(dir: &Path) -> [Option<crate::save::DatIssue>; 2] {
 /// `LogoRenderer.extractRenderState`: the logo's top 44 of 64 rows, then the
 /// edition banner's top 14 of 16 rows overlapping its bottom by 7.
 fn draw_logo(atlas: &HudAtlas, batch: &mut HudBatch, w: f32) {
+    // The player's own logo (`hud::TITLE_LOGO`), as wide as vanilla's, in place of both.
+    if let Some(r) = atlas.sprites.get(crate::hud::TITLE_LOGO_SPRITE).copied() {
+        let h = (256.0 * r.h as f32 / r.w.max(1) as f32).round();
+        batch.rect_uv((w / 2.0).floor() - 128.0, 30.0, 256.0, h, r, u32::MAX);
+        return;
+    }
     batch.sprite_region(
         atlas,
         "gui/title/minecraft",
@@ -442,6 +448,9 @@ pub struct Title {
     pub onboarding_finished: bool,
     /// Focused button id, for keyboard navigation.
     pub focused_button: Option<u8>,
+    /// The main screen's buttons are drawn elsewhere (a dual-screen handheld's second screen,
+    /// which presses them by id): the window keeps the logo and the splash.
+    pub buttons_elsewhere: bool,
     /// CreateWorldScreen's Experiments screen, over Create New World.
     experiments: RefCell<Option<experiments::ExperimentsScreen>>,
     /// ConfirmExperimentalFeaturesScreen, over Create New World.
@@ -707,6 +716,7 @@ impl Title {
             rules: RefCell::new(None),
             onboarding_finished: false,
             focused_button: None,
+            buttons_elsewhere: false,
             experiments: RefCell::new(None),
             confirm_experiments: RefCell::new(None),
             preparing: false,
@@ -1487,6 +1497,23 @@ impl Title {
             batch.sprite_scaled(atlas, "misc/unknown_server", x, y, 32.0, 32.0, u32::MAX);
         }
     }
+    /// A world's icon (`icon.png`, else the unknown server's) `size` square at (`x`, `y`), in
+    /// world icon atlas slot `slot`: a dual-screen handheld's own world list.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_world_icon(
+        &self,
+        atlas: &HudAtlas,
+        batch: &mut HudBatch,
+        world: &WorldEntry,
+        slot: usize,
+        x: f32,
+        y: f32,
+        size: f32,
+    ) {
+        let start = batch.vertices.len();
+        self.icon(atlas, batch, world, slot, x, y);
+        crate::hud::transform_since(batch, start, [x, y], size / 32.0, [0.0, 0.0]);
+    }
     /// The worlds, newest first, cached for two seconds (drawn every frame).
     /// Saves changed behind the screens' back (agent control renamed or deleted a world): the
     /// list shows them again.
@@ -1552,6 +1579,18 @@ impl Title {
             n += 1;
         }
         folder
+    }
+    /// The main screen's buttons as (id, label, enabled), for a second screen that draws them
+    /// and presses them by id (`focused_button` and `confirm_key_size`). Empty off the main
+    /// screen.
+    pub fn main_buttons(&self) -> Vec<(u8, String, bool)> {
+        if !matches!(self.mode, Mode::Main) || self.rules.borrow().is_some() {
+            return Vec::new();
+        }
+        self.buttons(320.0, 240.0)
+            .into_iter()
+            .map(|b| (b.id, b.label, b.enabled))
+            .collect()
     }
     fn buttons(&self, w: f32, h: f32) -> Vec<Button> {
         // The game rules draw and press their own.
@@ -2254,6 +2293,39 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
     ) {
         self.draw_with_items(atlas, None, batch, cursor, hide_splash);
     }
+    /// The logo and the splash over the panorama: the main screen's top, and all a window shows
+    /// while a dual-screen handheld's second screen has the title's other screens.
+    pub fn draw_banner(&self, atlas: &HudAtlas, batch: &mut HudBatch, hide_splash: bool) {
+        let w = batch.width.ceil();
+        draw_logo(atlas, batch, w);
+        if !hide_splash && let Some(splash) = self.splash.as_deref() {
+            let tw = HudBatch::text_width(atlas, splash);
+            let start = batch.vertices.len();
+            batch.text(
+                atlas,
+                splash,
+                -(tw / 2.0).floor(),
+                -8.0,
+                rgba(255, 255, 0, 255),
+                true,
+            );
+            let scale = (1.8
+                - (self.started.elapsed().as_secs_f32() * std::f32::consts::TAU)
+                    .sin()
+                    .abs()
+                    * 0.1)
+                * 100.0
+                / (tw + 32.0);
+            let (sin, cos) = (-20.0f32).to_radians().sin_cos();
+            for v in &mut batch.vertices[start..] {
+                let [x, y] = v.pos;
+                v.pos = [
+                    w / 2.0 + 123.0 + scale * (x * cos - y * sin),
+                    69.0 + scale * (x * sin + y * cos),
+                ];
+            }
+        }
+    }
     /// [`Title::draw`] with the item models, which draw the item icons of the
     /// Superflat screens the way `GuiGraphics.renderItem` does.
     pub fn draw_with_items(
@@ -2300,34 +2372,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         }
         match &self.mode {
             Mode::Main => {
-                draw_logo(atlas, batch, w);
-                if !hide_splash && let Some(splash) = self.splash.as_deref() {
-                    let tw = HudBatch::text_width(atlas, splash);
-                    let start = batch.vertices.len();
-                    batch.text(
-                        atlas,
-                        splash,
-                        -(tw / 2.0).floor(),
-                        -8.0,
-                        rgba(255, 255, 0, 255),
-                        true,
-                    );
-                    let scale = (1.8
-                        - (self.started.elapsed().as_secs_f32() * std::f32::consts::TAU)
-                            .sin()
-                            .abs()
-                            * 0.1)
-                        * 100.0
-                        / (tw + 32.0);
-                    let (sin, cos) = (-20.0f32).to_radians().sin_cos();
-                    for v in &mut batch.vertices[start..] {
-                        let [x, y] = v.pos;
-                        v.pos = [
-                            w / 2.0 + 123.0 + scale * (x * cos - y * sin),
-                            69.0 + scale * (x * sin + y * cos),
-                        ];
-                    }
-                }
+                self.draw_banner(atlas, batch, hide_splash);
                 let version = format!("Horizon {} (Rust)", horizon_core::VANILLA_VERSION);
                 batch.text(atlas, &version, 2.0, h - 10.0, u32::MAX, true);
                 // A nightly names its build in the top-left corner, the one spot no button reaches at any GUI
@@ -2955,7 +3000,8 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 cursor,
             ),
         }
-        for b in self.buttons(w, h) {
+        let elsewhere = self.buttons_elsewhere && matches!(self.mode, Mode::Main);
+        for b in self.buttons(w, h).into_iter().filter(|_| !elsewhere) {
             crate::widgets::record(&b.label, [b.x, b.y, b.w, 20.0], b.enabled);
             let inside =
                 cursor.0 >= b.x && cursor.0 < b.x + b.w && cursor.1 >= b.y && cursor.1 < b.y + 20.0;

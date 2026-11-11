@@ -747,6 +747,16 @@ pub fn configure_screen(immersive: bool, avoid_cutout: bool) {
         ui.enqueue(Command::Screen(immersive, avoid_cutout));
     }
 }
+/// The last screen preferences again: a window shown on another display (the second screen's
+/// Presentation) brings the system bars back on the game's.
+pub fn reapply_screen() {
+    if let Some(ui) = UI.get() {
+        ui.enqueue(Command::Screen(
+            ui.immersive.load(Ordering::Acquire),
+            ui.avoid_cutout.load(Ordering::Acquire),
+        ));
+    }
+}
 pub fn refresh_bounds() {
     if let Some(ui) = UI.get().filter(|ui| {
         ui.avoid_cutout.load(Ordering::Acquire) || !ui.immersive.load(Ordering::Acquire)

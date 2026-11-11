@@ -307,6 +307,7 @@ impl Launcher {
         winit::platform::android::set_native_content_aspect(
             self.catalog.config.screen.aspect.ratio(),
         );
+        crate::second_screen::enable(self.catalog.config.screen.second_screen);
     }
     fn fail(&mut self, error: impl std::fmt::Display) {
         log::error!("{error}");

@@ -705,6 +705,36 @@ pub fn scrollbar(
     );
 }
 
+thread_local! {
+    static TOOLTIP_ELSEWHERE: std::cell::RefCell<Option<Vec<Text>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// While on, `tooltip` keeps its lines instead of drawing them; off, the lines kept (the last
+/// tooltip asked for in between) are returned.
+pub fn tooltips_elsewhere(on: bool) -> Vec<Text> {
+    TOOLTIP_ELSEWHERE
+        .with_borrow_mut(|kept| std::mem::replace(kept, on.then(Vec::new)))
+        .unwrap_or_default()
+}
+
+/// A tooltip centered on `x`, its frame's bottom at `bottom`, not beside a cursor.
+pub fn tooltip_above(batch: &mut HudBatch, atlas: &HudAtlas, lines: &[Text], x: f32, bottom: f32) {
+    let w = lines
+        .iter()
+        .map(|l| atlas.font.width_text(l))
+        .fold(0.0, f32::max);
+    let h = if lines.len() == 1 {
+        8.0
+    } else {
+        10.0 * lines.len() as f32
+    };
+    // `tooltip` puts the text 12 right of and 12 above the cursor, its frame 4 around it.
+    let top = bottom - 4.0 - h;
+    let cursor = ((x - w / 2.0).floor() - 12.0, top + 12.0);
+    tooltip(batch, atlas, lines, cursor);
+}
+
 /// Screen tooltip (DefaultTooltipPositioner + TooltipRenderUtil): the
 /// background and frame sprites around the lines, beside the cursor.
 pub fn tooltip(batch: &mut HudBatch, atlas: &HudAtlas, lines: &[Text], cursor: (f32, f32)) {
@@ -712,6 +742,12 @@ pub fn tooltip(batch: &mut HudBatch, atlas: &HudAtlas, lines: &[Text], cursor: (
         return;
     }
     crate::widgets::frame_tooltip(lines);
+    // Kept for another screen to show (a dual-screen handheld's other display).
+    let kept = TOOLTIP_ELSEWHERE
+        .with_borrow_mut(|kept| kept.as_mut().map(|k| *k = lines.to_vec()).is_some());
+    if kept {
+        return;
+    }
     let w = lines
         .iter()
         .map(|l| atlas.font.width_text(l))

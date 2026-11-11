@@ -55,6 +55,8 @@ mod platform;
 mod proxy;
 #[path = "android/search_queue.rs"]
 mod search_queue;
+#[path = "android/second_screen.rs"]
+mod second_screen;
 #[path = "android/secure_store.rs"]
 mod secure_store;
 #[path = "android/shader_catalog.rs"]
@@ -220,6 +222,15 @@ fn android_main(app: AndroidApp) {
         secure_store::initialize(vm);
     }
     let engine_data = app.asset_manager().open(c"engine-data.zip");
+    // A local build's own title logo (tools/android_build.py), for the title screen.
+    if let Some(mut logo) = app.asset_manager().open(c"title-logo.png") {
+        let path = home.join("title-logo.png");
+        let copied =
+            std::fs::File::create(&path).and_then(|mut f| std::io::copy(&mut logo, &mut f));
+        if copied.is_ok() {
+            let _ = horizon_client::hud::TITLE_LOGO.set(path);
+        }
+    }
     APP.with(|slot| *slot.borrow_mut() = Some(app));
     let Some(cache) = platform::cache_dir() else {
         log::error!("Android supplied no application cache directory");

@@ -8921,7 +8921,10 @@ impl Game<'_> {
                 Some(view) => {
                     let status = |x: i32, z: i32| view.status(x, z);
                     let progress = view.has_progress().then_some(self.loading_progress);
-                    horizon_client::level_loading::draw(batch, atlas, Some(&status), progress);
+                    // Dual screen: the chunk map is on the second screen, the bar alone here.
+                    let map: Option<&dyn Fn(i32, i32) -> _> =
+                        (!super::hotbar::dual_screen()).then_some(&status);
+                    horizon_client::level_loading::draw(batch, atlas, map, progress);
                 }
                 None => horizon_client::level_loading::draw(batch, atlas, None, None),
             }

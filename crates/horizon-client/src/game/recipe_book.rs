@@ -87,6 +87,8 @@ pub(super) struct RecipeUi {
     /// The display a click last placed (`lastRecipe`), which Enter and Space
     /// place again; slot clicks keep it.
     last_clicked: Option<i32>,
+    /// The dual screen's crafting groups (`crafting_groups`) and what they were made from.
+    dual_groups: Option<(u64, Vec<Vec<(usize, bool)>>)>,
 }
 
 impl RecipeUi {
@@ -818,6 +820,97 @@ impl Game<'_> {
     /// A mouse button let go: a drag no longer selects in the search box.
     pub(super) fn recipe_book_release(&mut self) {
         self.recipe_ui.search_drag = false;
+    }
+    /// The open screen is the player's inventory or a crafting table: a crafting grid with the
+    /// crafting book (the dual screen draws its own crafting for it).
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(super) fn crafting_screen_open(&self) -> bool {
+        self.active_book() == Some(BookType::Crafting)
+    }
+    /// Legacy Console Edition's crafting on the dual screen: the groups (`RecipeCollection`)
+    /// the player's book holds that fit the open grid and go in Legacy tab `tab`
+    /// (`dual_menu::legacy_tab`, by the group's first result), each its recipes as (entry
+    /// index, craftable): craftable recipes first in a group, groups with one first. Made
+    /// again only when the items, the book, the grid or the tab change.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(super) fn crafting_groups(&mut self, tab: usize) -> Vec<Vec<(usize, bool)>> {
+        self.ensure_book();
+        self.sync_client_book();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for s in self.inventory.iter().flatten() {
+            (&s.item, s.count, s.damage).hash(&mut h);
+        }
+        for slot in 100..109 {
+            self.slot_mut(slot)
+                .as_ref()
+                .map(|s| (s.item.clone(), s.count))
+                .hash(&mut h);
+        }
+        (self.craft_size, self.recipe_ui.client_version, tab).hash(&mut h);
+        let key = h.finish();
+        if let Some((cached, groups)) = &self.recipe_ui.dual_groups
+            && *cached == key
+        {
+            return groups.clone();
+        }
+        let stock = self.book_available(BookType::Crafting);
+        let (gw, gh) = self.book_grid();
+        let Some(book) = self.recipe_ui.book.as_ref() else {
+            return Vec::new();
+        };
+        let items = self.items();
+        let legacy = |entry: &Entry| {
+            let item = &*entry.result.item;
+            let food = items.get(item).is_some_and(|i| i.food.is_some());
+            horizon_client::touch::dual_menu::legacy_tab(item, entry.category.name(), food)
+        };
+        let mut groups: Vec<Vec<(usize, bool)>> = self
+            .recipe_ui
+            .client
+            .collections(book, BookType::Crafting, Tab::Search)
+            .into_iter()
+            .filter(|c| {
+                c.entries
+                    .first()
+                    .is_some_and(|&i| legacy(&book.entries[i]) == tab)
+            })
+            .map(|c| {
+                let mut entries: Vec<(usize, bool)> = c
+                    .entries
+                    .iter()
+                    .filter(|&&i| book.entries[i].fits(gw, gh))
+                    .map(|&i| (i, book.can_craft(&book.entries[i], &stock)))
+                    .collect();
+                entries.sort_by_key(|e| !e.1);
+                entries
+            })
+            .filter(|g| !g.is_empty())
+            .collect();
+        groups.sort_by_key(|g| !g[0].1);
+        self.recipe_ui.dual_groups = Some((key, groups.clone()));
+        groups
+    }
+    /// A recipe of the book, by entry index.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(super) fn book_entry(&self, index: usize) -> Option<&Entry> {
+        self.recipe_ui.book.as_ref()?.entries.get(index)
+    }
+    /// The items an ingredient takes, in the book's order.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(super) fn book_items_of(
+        &self,
+        ingredient: &horizon_client::crafting::Ingredient,
+    ) -> Vec<String> {
+        self.recipe_ui
+            .book
+            .as_ref()
+            .map_or_else(Vec::new, |b| b.items_of(ingredient))
+    }
+    /// One set of a recipe placed in the open grid, as the book's button does.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(super) fn place_book_recipe(&mut self, index: usize) {
+        self.recipe_ui.ghost.clear();
+        self.place_recipe(BookType::Crafting, index, false);
     }
     /// `RecipeBookComponent.sendUpdateSettings`: the server owns the saved book.
     fn send_book_settings(&self, book_type: BookType) {

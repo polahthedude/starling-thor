@@ -213,6 +213,7 @@ mod flat;
 #[cfg(target_os = "android")]
 mod frame_scale;
 mod frame_timing;
+pub mod second_screen;
 
 mod frame_gen;
 mod hdr;
