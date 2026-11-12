@@ -600,6 +600,9 @@ impl Game<'_> {
             .clone()
             .unwrap_or_else(|| ItemStack::new("minecraft:chest", 1));
         self.draw_showcase(batch, &shown, center);
+        if let Some(stack) = &stack {
+            self.draw_showcase_tooltip(batch, stack, true, center);
+        }
         let title = {
             let tabs = self.creative_screen.tab_headers();
             let tab = &tabs[self.creative_screen.selected.min(tabs.len() - 1)];
@@ -742,6 +745,9 @@ impl Game<'_> {
                     .clone()
                     .unwrap_or_else(|| ItemStack::new(container_icon(&menu), 1));
                 self.draw_showcase(batch, &shown, center);
+                if let Some(stack) = &stack {
+                    self.draw_showcase_tooltip(batch, stack, false, center);
+                }
             }
         }
         let name =

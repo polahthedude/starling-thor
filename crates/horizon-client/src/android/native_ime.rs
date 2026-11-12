@@ -32,6 +32,8 @@ enum Command {
     Poll,
     Capture(bool),
     Bounds,
+    /// Read whether the system keyboard is showing (`Ui::read_keyboard`).
+    Keyboard,
     ImportDocument,
     Screen(bool, bool),
 }
@@ -50,6 +52,10 @@ struct Ui {
     ready: AtomicBool,
     bounds_pending: AtomicBool,
     bottom: AtomicI32,
+    /// What the UI thread last saw of the system keyboard: showing, and its height in pixels.
+    keyboard_visible: AtomicBool,
+    keyboard_height: AtomicI32,
+    keyboard_pending: AtomicBool,
     failed: AtomicBool,
     keyboard_request: Mutex<Option<std::time::Instant>>,
     last_bounds: Mutex<Option<std::time::Instant>>,
@@ -179,6 +185,9 @@ pub unsafe fn initialize(
         ready: AtomicBool::new(false),
         bounds_pending: AtomicBool::new(false),
         bottom: AtomicI32::new(0),
+        keyboard_visible: AtomicBool::new(false),
+        keyboard_height: AtomicI32::new(0),
+        keyboard_pending: AtomicBool::new(false),
         failed: AtomicBool::new(false),
         keyboard_request: Mutex::new(None),
         last_bounds: Mutex::new(None),
@@ -261,6 +270,62 @@ impl Ui {
             *request = None;
         }
         Ok(())
+    }
+    /// Whether the system keyboard is showing and how tall it is, in pixels, read on the UI
+    /// thread. Android 11+ says so outright (`WindowInsets.isVisible(Type.ime())`); before it
+    /// the keyboard is whatever has taken a good part of the window's height from the
+    /// visible display frame, which is a guess (a split-screen window or a tall system bar
+    /// can fool it).
+    fn read_keyboard(&self, env: &mut JNIEnv<'_>) -> jni::errors::Result<(bool, i32)> {
+        // WindowInsets.Type.ime().
+        const IME: i32 = 8;
+        let sdk = env
+            .get_static_field("android/os/Build$VERSION", "SDK_INT", "I")?
+            .i()?;
+        if sdk >= 30 {
+            let insets = env
+                .call_method(
+                    &self.native,
+                    "getRootWindowInsets",
+                    "()Landroid/view/WindowInsets;",
+                    &[],
+                )?
+                .l()?;
+            // Not attached to a window yet: nothing is showing.
+            if insets.is_null() {
+                return Ok((false, 0));
+            }
+            let visible = env
+                .call_method(&insets, "isVisible", "(I)Z", &[JValue::Int(IME)])?
+                .z()?;
+            let bottom = env
+                .call_method(
+                    &insets,
+                    "getInsets",
+                    "(I)Landroid/graphics/Insets;",
+                    &[JValue::Int(IME)],
+                )
+                .and_then(|insets| insets.l())
+                .and_then(|insets| env.get_field(&insets, "bottom", "I")?.i())?;
+            return Ok((visible, bottom.max(0)));
+        }
+        let rect = env.new_object("android/graphics/Rect", "()V", &[])?;
+        env.call_method(
+            &self.native,
+            "getWindowVisibleDisplayFrame",
+            "(Landroid/graphics/Rect;)V",
+            &[JValue::Object(&rect)],
+        )?;
+        let visible_bottom = env.get_field(&rect, "bottom", "I")?.i()?;
+        let window = env
+            .call_method(&self.activity, "getWindow", "()Landroid/view/Window;", &[])?
+            .l()?;
+        let decor = env
+            .call_method(&window, "getDecorView", "()Landroid/view/View;", &[])?
+            .l()?;
+        let full = env.call_method(&decor, "getHeight", "()I", &[])?.i()?;
+        let covered = (full - visible_bottom).max(0);
+        Ok((full > 0 && covered * 100 > full * 15, covered))
     }
     fn apply_screen(&self, env: &mut JNIEnv<'_>, immersive: bool) -> jni::errors::Result<()> {
         let window = env
@@ -603,6 +668,12 @@ impl Ui {
                 }
                 winit::platform::android::set_native_content_insets(safe);
             }
+            Command::Keyboard => {
+                self.keyboard_pending.store(false, Ordering::Release);
+                let (visible, height) = self.read_keyboard(env)?;
+                self.keyboard_visible.store(visible, Ordering::Release);
+                self.keyboard_height.store(height, Ordering::Release);
+            }
             Command::Capture(capture) => {
                 if capture {
                     env.call_method(&self.edit, "clearFocus", "()V", &[])?;
@@ -719,6 +790,35 @@ pub fn capture_mouse(capture: bool) -> bool {
     } else {
         false
     }
+}
+
+/// The system keyboard as the Android UI thread last saw it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeyboardState {
+    pub visible: bool,
+    /// How much of the window's bottom it covers, in pixels (0 while hidden).
+    pub height: u32,
+}
+
+/// Whether the system keyboard is showing: the answer of the last read, and a fresh read
+/// queued (at most one at a time), so call it each frame and it follows the keyboard a frame
+/// or two behind. None without the native text input (`initialize` failed). This is the
+/// keyboard's real state, not whether we asked for it (`show`): the user can swipe it away.
+pub fn keyboard_state() -> Option<KeyboardState> {
+    let ui = UI.get().filter(|ui| !ui.failed.load(Ordering::Acquire))?;
+    if !ui.keyboard_pending.swap(true, Ordering::AcqRel) {
+        ui.enqueue(Command::Keyboard);
+    }
+    Some(KeyboardState {
+        visible: ui.keyboard_visible.load(Ordering::Acquire),
+        height: ui.keyboard_height.load(Ordering::Acquire).max(0) as u32,
+    })
+}
+
+/// [`keyboard_state`]'s `visible`, false without the native text input.
+#[allow(dead_code)]
+pub fn keyboard_visible() -> bool {
+    keyboard_state().is_some_and(|k| k.visible)
 }
 
 /// Launcher-only safe bounds; View geometry is read on the Android UI thread.

@@ -307,6 +307,24 @@ impl Game<'_> {
         self.draw_item_posed(batch, &one, pose);
     }
 
+    /// What `stack`'s tooltip says beyond its name (lore, enchantments, effects, attributes...),
+    /// as vanilla's tooltip beside the showcase, when it has any.
+    pub(super) fn draw_showcase_tooltip(
+        &mut self,
+        batch: &mut HudBatch,
+        stack: &ItemStack,
+        creative: bool,
+        center: [f32; 2],
+    ) {
+        if self.stack_tooltip_lines(stack, false, creative).len() < 2 {
+            return;
+        }
+        // To the right of the item, kept on the window.
+        let x = center[0] + 16.0 * SCALE * 0.6;
+        let y = center[1] - 24.0;
+        self.draw_stack_tooltip_with(batch, stack, creative, x, y, Vec::new());
+    }
+
     /// The player standing around `center` (GUI pixels), holding what the hotbar holds: a
     /// swipe spins it and a tap makes it hop, as an item; it sways a little while idle, turns
     /// round once and looks at a new armor piece when one goes on, and swings its arm when what

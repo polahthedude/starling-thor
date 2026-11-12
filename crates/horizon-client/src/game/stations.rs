@@ -2118,7 +2118,7 @@ impl Game<'_> {
     /// projectile: `ChargedProjectiles.addProjectileTooltip` takes its details
     /// without the name, the player and the advanced flag. `creative` is
     /// `TooltipFlag.isCreative`: a creative tab's own slot.
-    fn stack_tooltip_lines(
+    pub(super) fn stack_tooltip_lines(
         &self,
         stack: &ItemStack,
         nested: bool,
