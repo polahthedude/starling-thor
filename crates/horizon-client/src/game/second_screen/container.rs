@@ -45,6 +45,10 @@ struct State {
     /// it last scrolled from, and whether it has swiped. A tap that never swiped presses the
     /// slot when it lifts.
     swipe: Option<([f32; 2], f32, bool)>,
+    /// The swipe's speed in rows a second (smoothed) and when it was last measured; after the
+    /// finger lifts at speed, the grid keeps going at `fling`, slowing, until it stops.
+    swipe_speed: (f32, Option<std::time::Instant>),
+    fling: (f32, Option<std::time::Instant>),
 }
 
 thread_local! {
@@ -219,11 +223,16 @@ impl Game<'_> {
                     CONTAINER.with_borrow_mut(|s| (s.at, s.pad_active) = (p, false));
                     // The creative grid: a swipe scrolls it, a tap takes what is under the
                     // finger once it lifts.
+                    // A finger down catches a coasting grid.
+                    CONTAINER.with_borrow_mut(|s| s.fling = (0.0, None));
                     if creative
                         && inside(grid_area, p)
                         && self.creative_screen.can_scroll(&self.pack.names)
                     {
-                        CONTAINER.with_borrow_mut(|s| s.swipe = Some((p, p[1], false)));
+                        CONTAINER.with_borrow_mut(|s| {
+                            s.swipe = Some((p, p[1], false));
+                            s.swipe_speed = (0.0, Some(std::time::Instant::now()));
+                        });
                         continue;
                     }
                     if creative && let Some(window) = window.as_ref() {
@@ -254,6 +263,16 @@ impl Game<'_> {
                             // A row is 18 pixels: the grid follows the finger.
                             let rows = f64::from((p[1] - last) / 18.0);
                             self.creative_screen.wheel(rows, &self.pack.names);
+                            // Its speed, smoothed over the last few moves.
+                            let now = std::time::Instant::now();
+                            CONTAINER.with_borrow_mut(|s| {
+                                if let Some(t) = s.swipe_speed.1 {
+                                    let dt = now.duration_since(t).as_secs_f32().max(0.004);
+                                    let speed = rows as f32 / dt;
+                                    s.swipe_speed.0 = s.swipe_speed.0 * 0.6 + speed * 0.4;
+                                }
+                                s.swipe_speed.1 = Some(now);
+                            });
                         }
                         let last = if moved { p[1] } else { last };
                         CONTAINER.with_borrow_mut(|s| s.swipe = Some((start, last, moved)));
@@ -268,7 +287,20 @@ impl Game<'_> {
                 Touch::Up([x, y]) => {
                     let p = [x / layout.scale, y / layout.scale];
                     if let Some((start, _, moved)) = CONTAINER.with_borrow_mut(|s| s.swipe.take()) {
-                        if !moved {
+                        if moved {
+                            // Lifted while still moving: it coasts on.
+                            CONTAINER.with_borrow_mut(|s| {
+                                let moving = s
+                                    .swipe_speed
+                                    .1
+                                    .is_some_and(|t| t.elapsed().as_millis() < 80);
+                                s.fling = if moving && s.swipe_speed.0.abs() > 2.0 {
+                                    (s.swipe_speed.0, Some(std::time::Instant::now()))
+                                } else {
+                                    (0.0, None)
+                                };
+                            });
+                        } else {
                             let at = to_window(start);
                             self.window_mouse(events, id, at, Some(ElementState::Pressed));
                             self.window_mouse(events, id, at, Some(ElementState::Released));
@@ -289,6 +321,22 @@ impl Game<'_> {
                 || !matches!(self.screen, Screen::Inventory | Screen::Creative)
             {
                 return true;
+            }
+        }
+        // The grid coasting after a swipe: slowing, and stopped at either end.
+        if creative && CONTAINER.with_borrow(|s| s.swipe.is_none()) {
+            let (speed, since) = CONTAINER.with_borrow(|s| s.fling);
+            if let (true, Some(t)) = (speed != 0.0, since) {
+                let now = std::time::Instant::now();
+                let dt = now.duration_since(t).as_secs_f32().min(0.1);
+                self.creative_screen
+                    .wheel(f64::from(speed * dt), &self.pack.names);
+                let scroll = self.creative_screen.scroll;
+                let speed = speed * (-3.0 * dt).exp();
+                let stopped = speed.abs() < 0.5 || scroll <= 0.0 || scroll >= 1.0;
+                CONTAINER.with_borrow_mut(|s| {
+                    s.fling = if stopped { (0.0, None) } else { (speed, Some(now)) };
+                });
             }
         }
         let right = |game: &mut Self, slot: usize| game.container_click(slot, 1, Input::Pickup);
