@@ -39,6 +39,8 @@ struct State {
     book_press: Option<([f32; 2], bool)>,
     /// The control a recipe was last placed from: A on it again takes the craft.
     book_placed: Option<usize>,
+    /// The creative screen's slot the controller pressed, in window pixels, for the next frame.
+    creative_press: Option<[f32; 2]>,
 }
 
 thread_local! {
@@ -93,6 +95,11 @@ impl Game<'_> {
     pub(super) fn container_region(&self, window: &HudBatch) -> Option<[f32; 4]> {
         if self.container_moved_whole() {
             return None;
+        }
+        if self.screen == Screen::Creative {
+            // Vanilla's creative screen and its tabs, which stand 28 above and below it.
+            let (ox, oy) = self.inventory_origin(window);
+            return Some([ox, oy - 28.0, Creative::WIDTH, Creative::HEIGHT + 56.0]);
         }
         let width = self.native_screen_width().unwrap_or(176.0);
         let (ox, oy) = self.inventory_origin(window);
@@ -156,11 +163,20 @@ impl Game<'_> {
         let to_window = |p: [f32; 2]| [p[0] - layout.offset[0], p[1] - layout.offset[1]];
         // The slot at `p` (the container's, the inventory's or the hotbar's), found where it
         // is on the window.
+        // The creative screen is the window's mouse all over (its tabs, scrollbar and slots as
+        // vanilla's), so no slot is the frame's own there.
+        let creative = self.screen == Screen::Creative;
         let slot_at = |game: &Self, p: [f32; 2]| {
-            let window = window.as_ref().filter(|_| inside(lower_region, p))?;
+            let window = window
+                .as_ref()
+                .filter(|_| inside(lower_region, p) && !creative)?;
             let [x, y] = to_window(p);
             game.slot_at(window, x, y)
         };
+        if let Some(at) = CONTAINER.with_borrow_mut(|s| s.creative_press.take()) {
+            self.window_mouse(events, id, at, Some(ElementState::Pressed));
+            self.window_mouse(events, id, at, Some(ElementState::Released));
+        }
         // The controller's press on the window's recipe book.
         if let Some((at, again)) = CONTAINER.with_borrow_mut(|s| s.book_press.take()) {
             // A again on the recipe just placed: its craft is in the result slot, take it.
@@ -184,6 +200,12 @@ impl Game<'_> {
                 Touch::Down([x, y]) => {
                     let p = [x / layout.scale, y / layout.scale];
                     CONTAINER.with_borrow_mut(|s| (s.at, s.pad_active) = (p, false));
+                    if creative && let Some(window) = window.as_ref() {
+                        // The item under the finger is the one the window shows.
+                        let [x, y] = to_window(p);
+                        let slot = self.slot_at(window, x, y);
+                        CONTAINER.with_borrow_mut(|s| s.focus = slot.or(s.focus));
+                    }
                     match slot_at(self, p) {
                         Some(slot) => self.slot_down(Some(slot), p, click),
                         // Vanilla's buttons, lists and fields: pressed where they are on the
@@ -193,6 +215,7 @@ impl Game<'_> {
                             let state = Some(ElementState::Pressed);
                             self.window_mouse(events, id, to_window(p), state);
                         }
+                        None if creative => {}
                         None => self.slot_down(None, p, click),
                     }
                 }
@@ -217,7 +240,9 @@ impl Game<'_> {
                     }
                 }
             }
-            if !self.screen_on_second_screen() || self.screen != Screen::Inventory {
+            if !self.screen_on_second_screen()
+                || !matches!(self.screen, Screen::Inventory | Screen::Creative)
+            {
                 return true;
             }
         }
@@ -237,7 +262,11 @@ impl Game<'_> {
         }
         let cursor = std::mem::replace(&mut self.cursor, (-10_000.0, -10_000.0));
         super::LOWER_PASS.set(true);
-        self.draw_inventory(&mut batch);
+        if creative {
+            self.draw_creative(&mut batch);
+        } else {
+            self.draw_inventory(&mut batch);
+        }
         super::LOWER_PASS.set(false);
         self.cursor = cursor;
         [batch.width, batch.height] = full;
@@ -316,7 +345,11 @@ impl Game<'_> {
         if super::menu::hotbar_shoulder(self, button) {
             return true;
         }
-        if self.book_pad_input(button) {
+        if self.screen == Screen::Creative {
+            if let Some(taken) = self.creative_pad_input(&window, button) {
+                return taken;
+            }
+        } else if self.book_pad_input(button) {
             return true;
         }
         let rows = self.container_pad_rows();
@@ -347,6 +380,88 @@ impl Game<'_> {
         CONTAINER.with_borrow_mut(|s| s.pad_active = true);
         self.container_click(slot, button, input);
         true
+    }
+
+    /// A controller button on vanilla's creative screen that isn't a move over the slots: the
+    /// triggers change tab, A presses the slot as the window's mouse, X (Quick Move) shift-
+    /// presses it. None leaves the button to the slots' own handling.
+    fn creative_pad_input(
+        &mut self,
+        window: &HudBatch,
+        button: horizon_client::gamepad::Button,
+    ) -> Option<bool> {
+        use horizon_client::gamepad::Button as B;
+        match button {
+            B::LeftTrigger | B::RightTrigger => {
+                let n = self.creative_screen.tab_headers().len().max(1);
+                let at = self.creative_screen.selected;
+                let next = if button == B::RightTrigger {
+                    (at + 1) % n
+                } else {
+                    (at + n - 1) % n
+                };
+                self.creative_screen.select(next);
+                Some(true)
+            }
+            B::South => {
+                let rows = self.container_pad_rows();
+                let (row, col) = CONTAINER.with_borrow(|s| s.pad);
+                let row = row.min(rows.len().saturating_sub(1));
+                let slot = rows
+                    .get(row)
+                    .and_then(|r| r.get(col.min(r.len().saturating_sub(1))))
+                    .copied()?;
+                let (ox, oy) = self.inventory_origin(window);
+                let (sx, sy) = self.slot_position(slot);
+                CONTAINER.with_borrow_mut(|s| {
+                    s.pad_active = true;
+                    s.focus = Some(slot);
+                    s.creative_press = Some([ox + sx + 8.0, oy + sy + 8.0]);
+                });
+                Some(true)
+            }
+            // The other buttons would click a container's menu: not this screen's.
+            B::North | B::West => Some(true),
+            _ => None,
+        }
+    }
+
+    /// The window while the creative screen is open: the chosen item large (spun by a finger
+    /// on the window), the tab's title and the item's name, and the controls.
+    pub(super) fn draw_creative_container_upper(&mut self, batch: &mut HudBatch) {
+        let (focus, pad_active, pad) = CONTAINER.with_borrow(|s| (s.focus, s.pad_active, s.pad));
+        let focus = if pad_active {
+            let rows = self.container_pad_rows();
+            rows.get(pad.0)
+                .and_then(|row| row.get(pad.1.min(row.len().saturating_sub(1))))
+                .copied()
+                .or(focus)
+        } else {
+            focus
+        };
+        let stack = self
+            .carried
+            .clone()
+            .or_else(|| focus.and_then(|slot| self.slot_mut(slot).clone()));
+        let (w, h) = (batch.width, batch.height);
+        let center = [(w / 2.0).floor(), (h * 0.40).floor()];
+        let shown = stack
+            .clone()
+            .unwrap_or_else(|| ItemStack::new("minecraft:chest", 1));
+        self.draw_showcase(batch, &shown, center);
+        let title = {
+            let tabs = self.creative_screen.tab_headers();
+            let tab = &tabs[self.creative_screen.selected.min(tabs.len() - 1)];
+            self.creative_tab_title(tab)
+        };
+        let name =
+            stack.map(|s| item_tooltip::name_line(&s, &|key| self.pack.names.display_get(key)));
+        let (heading, name) = match &name {
+            Some(name) => (Some(title.as_str()), name.as_str()),
+            None => (None, title.as_str()),
+        };
+        let hint = self.pad_hint("{south} Take    {lb}/{rb} Hotbar    {lt}/{rt} Tab    {east} Exit");
+        self.draw_upper_caption(batch, heading, Some(name), &hint);
     }
 
     /// The window's open recipe book's controls a controller can be on (not the book button,

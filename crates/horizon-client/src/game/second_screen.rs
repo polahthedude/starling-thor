@@ -73,6 +73,11 @@ thread_local! {
     static PANORAMA: Cell<Option<[f32; 2]>> = const { Cell::new(None) };
 }
 
+/// The creative screen on the second screen as every container's: vanilla's screen on the
+/// lower screen, the chosen item on the window. Off: New 3DS Edition's own layout
+/// (`creative.rs`), kept in case it is wanted back.
+const VANILLA_CREATIVE: bool = true;
+
 /// The lower screen's copy of a container screen is being drawn (`container_frame`).
 pub(super) fn lower_pass() -> bool {
     LOWER_PASS.get()
@@ -243,6 +248,7 @@ impl Game<'_> {
         let owned = self.second_screen_owns_pad();
         let taken = match self.screen {
             Screen::Paused => self.pause_pad(button),
+            Screen::Creative if VANILLA_CREATIVE => self.container_pad(button),
             Screen::Creative => self.creative_pad(button),
             Screen::Inventory if self.crafting_screen_open() => self.legacy_pad(button),
             Screen::Inventory => self.container_pad(button),
@@ -593,6 +599,9 @@ impl Game<'_> {
             return self.legacy_frame(size, touches);
         }
         if self.screen == Screen::Creative {
+            if VANILLA_CREATIVE && self.container_frame(events, id, size, touches) {
+                return;
+            }
             return self.creative_frame(size, touches);
         }
         if self.screen == Screen::Inventory && self.container_frame(events, id, size, touches) {

@@ -840,6 +840,9 @@ impl Game<'_> {
             batch.fill_gradient(&self.gui.atlas, (0.0, top, w, h - top), 0, 0xE000_0000);
         }
         if self.screen == Screen::Creative {
+            if super::VANILLA_CREATIVE {
+                return self.draw_creative_container_upper(batch);
+            }
             return self.draw_creative_upper(batch);
         }
         if self.screen == Screen::Paused {
