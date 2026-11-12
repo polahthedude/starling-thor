@@ -845,7 +845,7 @@ impl Game<'_> {
             }
             return self.draw_creative_upper(batch);
         }
-        if self.screen == Screen::Paused {
+        if self.screen == Screen::Paused && !super::VANILLA_PAUSE {
             return self.draw_pause_upper(batch);
         }
         if self.screen == Screen::Inventory && !self.crafting_screen_open() {

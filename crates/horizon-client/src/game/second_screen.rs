@@ -78,6 +78,10 @@ thread_local! {
 /// (`creative.rs`), kept in case it is wanted back.
 const VANILLA_CREATIVE: bool = true;
 
+/// The pause menu as vanilla's, moved whole to the lower screen like the other menus. Off:
+/// the dual screen's own pause layout (`screens.rs`), kept in case it is wanted back.
+const VANILLA_PAUSE: bool = true;
+
 /// The lower screen's copy of a container screen is being drawn (`container_frame`).
 pub(super) fn lower_pass() -> bool {
     LOWER_PASS.get()
@@ -207,7 +211,8 @@ impl Game<'_> {
         }
         self.screen_on_second_screen()
             && match self.screen {
-                Screen::Paused | Screen::Creative => true,
+                Screen::Paused => !VANILLA_PAUSE,
+                Screen::Creative => true,
                 Screen::Inventory => {
                     self.crafting_screen_open()
                         || self
@@ -247,7 +252,7 @@ impl Game<'_> {
         }
         let owned = self.second_screen_owns_pad();
         let taken = match self.screen {
-            Screen::Paused => self.pause_pad(button),
+            Screen::Paused if !VANILLA_PAUSE => self.pause_pad(button),
             Screen::Creative if VANILLA_CREATIVE => self.container_pad(button),
             Screen::Creative => self.creative_pad(button),
             Screen::Inventory if self.crafting_screen_open() => self.legacy_pad(button),
@@ -592,7 +597,7 @@ impl Game<'_> {
         touches: &[crate::second_screen::Touch],
     ) {
         // The inventory, crafting, creative and pause screens have their own here.
-        if self.screen == Screen::Paused {
+        if self.screen == Screen::Paused && !VANILLA_PAUSE {
             return self.pause_frame(size, taps);
         }
         if self.crafting_screen_open() {
@@ -641,6 +646,9 @@ impl Game<'_> {
                 force: None,
                 id: LOWER_FINGER,
             };
+            if phase == TouchPhase::Started {
+                self.android_touch_haptic(6);
+            }
             self.android_menu_touch(&touch, events, id);
             // The tap may have closed the screen (or the game).
             if !self.screen_on_second_screen() {

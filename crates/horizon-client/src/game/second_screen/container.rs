@@ -49,6 +49,10 @@ struct State {
     /// finger lifts at speed, the grid keeps going at `fling`, slowing, until it stops.
     swipe_speed: (f32, Option<std::time::Instant>),
     fling: (f32, Option<std::time::Instant>),
+    /// The creative grid's first row as last drawn (each new one ticks the haptics), and the
+    /// scrollbar thumb's last position, time and speed (scroll a second) while held.
+    row: usize,
+    thumb: (f32, Option<std::time::Instant>, f32),
 }
 
 thread_local! {
@@ -247,6 +251,10 @@ impl Game<'_> {
                         // window, held while the finger is down.
                         None if inside(lower_region, p) => {
                             set_pressing(true);
+                            self.android_touch_haptic(6);
+                            CONTAINER.with_borrow_mut(|s| {
+                                s.thumb = (self.creative_screen.scroll, Some(std::time::Instant::now()), 0.0);
+                            });
                             let state = Some(ElementState::Pressed);
                             self.window_mouse(events, id, to_window(p), state);
                         }
@@ -280,6 +288,18 @@ impl Game<'_> {
                     }
                     if pressing() {
                         self.window_mouse(events, id, to_window(p), None);
+                        if creative && self.creative_screen.scrolling {
+                            let (now, scroll) = (std::time::Instant::now(), self.creative_screen.scroll);
+                            CONTAINER.with_borrow_mut(|s| {
+                                if let Some(t) = s.thumb.1 {
+                                    let dt = now.duration_since(t).as_secs_f32().max(0.004);
+                                    let v = (scroll - s.thumb.0) / dt;
+                                    s.thumb.2 = s.thumb.2 * 0.6 + v * 0.4;
+                                }
+                                s.thumb.0 = scroll;
+                                s.thumb.1 = Some(now);
+                            });
+                        }
                     } else {
                         Self::slot_move(p);
                     }
@@ -302,6 +322,7 @@ impl Game<'_> {
                             });
                         } else {
                             let at = to_window(start);
+                            self.android_touch_haptic(6);
                             self.window_mouse(events, id, at, Some(ElementState::Pressed));
                             self.window_mouse(events, id, at, Some(ElementState::Released));
                         }
@@ -309,8 +330,26 @@ impl Game<'_> {
                     }
                     if pressing() {
                         set_pressing(false);
+                        // The scrollbar's thumb let go of while moving: the grid coasts on.
+                        if creative && self.creative_screen.scrolling {
+                            let hidden = self.creative_screen.rows(&self.pack.names).saturating_sub(5);
+                            CONTAINER.with_borrow_mut(|s| {
+                                let moving =
+                                    s.thumb.1.is_some_and(|t| t.elapsed().as_millis() < 80);
+                                let rows = -s.thumb.2 * hidden as f32;
+                                s.fling = if moving && rows.abs() > 2.0 {
+                                    (rows, Some(std::time::Instant::now()))
+                                } else {
+                                    (0.0, None)
+                                };
+                                s.thumb = (0.0, None, 0.0);
+                            });
+                        }
                         let state = Some(ElementState::Released);
                         self.window_mouse(events, id, to_window(p), state);
+                        if creative && crate::platform::field_at(to_window(p)) {
+                            self.android_show_keyboard();
+                        }
                     } else {
                         let slot = slot_at(self, p);
                         self.slot_up(slot, click);
@@ -321,6 +360,13 @@ impl Game<'_> {
                 || !matches!(self.screen, Screen::Inventory | Screen::Creative)
             {
                 return true;
+            }
+        }
+        // A tick for every row the creative grid passes, however it was moved.
+        if creative {
+            let row = self.creative_screen.first_row(&self.pack.names);
+            if CONTAINER.with_borrow_mut(|s| std::mem::replace(&mut s.row, row)) != row {
+                self.android_touch_haptic(4);
             }
         }
         // The grid coasting after a swipe: slowing, and stopped at either end.
@@ -519,6 +565,18 @@ impl Game<'_> {
         }
     }
 
+    /// The stack in a creative screen slot: an item tab's grid slots show what the tab lists at
+    /// the scrolled row, the others are the game's.
+    fn creative_stack(&mut self, slot: usize) -> Option<ItemStack> {
+        if slot >= Creative::DISPLAY {
+            let first = self.creative_screen.first_row(&self.pack.names);
+            return self
+                .creative_screen
+                .shown(&self.pack.names, first * 9 + slot - Creative::DISPLAY);
+        }
+        self.slot_mut(slot).clone()
+    }
+
     /// The window while the creative screen is open: the chosen item large (spun by a finger
     /// on the window), the tab's title and the item's name, and the controls.
     pub(super) fn draw_creative_container_upper(&mut self, batch: &mut HudBatch) {
@@ -535,7 +593,7 @@ impl Game<'_> {
         let stack = self
             .carried
             .clone()
-            .or_else(|| focus.and_then(|slot| self.slot_mut(slot).clone()));
+            .or_else(|| focus.and_then(|slot| self.creative_stack(slot)));
         let (w, h) = (batch.width, batch.height);
         let center = [(w / 2.0).floor(), (h * 0.40).floor()];
         let shown = stack

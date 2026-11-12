@@ -14120,14 +14120,22 @@ impl Game<'_> {
                 t.column + 1
             )
         };
-        batch.fill(
-            &self.gui.atlas,
-            0.0,
-            0.0,
-            batch.width,
-            batch.height,
-            rgba(16, 16, 16, 160),
-        );
+        // The dual screen's lower copy has no world to dim, and its fitted area is larger than
+        // the art (the tabs): the dim would show as a box.
+        #[cfg(target_os = "android")]
+        let dim = !second_screen::lower_pass();
+        #[cfg(not(target_os = "android"))]
+        let dim = true;
+        if dim {
+            batch.fill(
+                &self.gui.atlas,
+                0.0,
+                0.0,
+                batch.width,
+                batch.height,
+                rgba(16, 16, 16, 160),
+            );
+        }
         // Unselected tabs behind the panel, then the panel, then the selected tab.
         for (i, t) in tabs.iter().enumerate() {
             if i != selected && self.creative_screen.on_page(t) {
