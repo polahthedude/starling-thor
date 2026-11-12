@@ -14,7 +14,8 @@ The workflow does not publish GitHub Releases or send Discord messages.
 
 ## One-time maintainer setup
 
-Create a **new, dedicated dev key**, not the release signing key. In PowerShell:
+To allow in-place updates between dev builds, create a **new, dedicated dev key**,
+not the release signing key. In PowerShell:
 
 ```powershell
 keytool -genkeypair -keystore "$env:TEMP/horizon-ci-dev.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -validity 10000 -dname "CN=Horizon Android Dev CI"
@@ -27,12 +28,15 @@ of this key outside the repository. The password/alias above match the existing
 build configuration. Clear the clipboard afterwards. Never attach the key to an
 issue, artifact, release or message.
 
-The workflow fails early if the secret is absent. Keeping the same key permits
-in-place updates between CI dev builds; replacing it requires reinstalling the
-dev app. Existing locally signed debug APKs may use a different key as well.
-Back up their test data before uninstalling. Normal release installations are
-unaffected. Do not reset this workflow's run counter: its increasing value is
-used as Android's dev-channel version code.
+If the secret is absent, the workflow creates a temporary signing key so the APK
+can still be built and tested. Such an APK cannot be updated in place by a later
+build; uninstall it before installing another and back up its test data first.
+Its `BUILD.json` identifies the signing mode. Keeping the same configured key
+permits in-place updates between CI dev builds; replacing it also requires
+reinstalling the dev app. Existing locally signed debug APKs may use a different
+key as well. Normal release installations are unaffected. Do not reset this
+workflow's run counter: its increasing value is used as Android's dev-channel
+version code.
 
 ## Sharing with testers
 

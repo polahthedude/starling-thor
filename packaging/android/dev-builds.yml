@@ -49,25 +49,32 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           persist-credentials: false
-      - name: Restore dedicated dev signing identity
-        env:
-          DEV_KEYSTORE: ${{ secrets.ANDROID_DEV_KEYSTORE_BASE64 }}
-        run: |
-          python3 - <<'PY'
-          import base64, os
-          from pathlib import Path
-          value = os.environ.get('DEV_KEYSTORE', '')
-          if not value:
-              raise SystemExit('Set ANDROID_DEV_KEYSTORE_BASE64 first; see docs/android-dev-builds.md')
-          path = Path('.local/android/debug.keystore')
-          path.parent.mkdir(parents=True, exist_ok=True)
-          path.write_bytes(base64.b64decode(value, validate=True))
-          path.chmod(0o600)
-          PY
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: '25'
+      - name: Set up dev signing identity
+        id: signing
+        env:
+          DEV_KEYSTORE: ${{ secrets.ANDROID_DEV_KEYSTORE_BASE64 }}
+        run: |
+          mkdir -p .local/android
+          if [[ -n "$DEV_KEYSTORE" ]]; then
+            python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          path = Path('.local/android/debug.keystore')
+          path.write_bytes(base64.b64decode(os.environ['DEV_KEYSTORE'], validate=True))
+          path.chmod(0o600)
+          PY
+            echo "mode=persistent" >> "$GITHUB_OUTPUT"
+          else
+            keytool -genkeypair -keystore .local/android/debug.keystore \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -validity 10000 -dname "CN=Horizon Android Temporary CI" -noprompt
+            chmod 600 .local/android/debug.keystore
+            echo "mode=temporary" >> "$GITHUB_OUTPUT"
+          fi
       - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
         with:
           gradle-version: '8.14'
@@ -116,6 +123,7 @@ jobs:
       - name: Collect only audited APK and public metadata
         env:
           ABI: ${{ matrix.abi }}
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
         run: |
           python3 - <<'PY'
           import hashlib, json, os, shutil
@@ -131,6 +139,7 @@ jobs:
               shutil.copyfile(source, out / dest)
           (out / 'BUILD.json').write_text(json.dumps({'commit': sha, 'abi': abi, 'profile': 'release',
               'package': 'dev.horizon.android.dev', 'experimental': True,
+              'signing': os.environ['SIGNING_MODE'],
               'run': f'https://github.com/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["GITHUB_RUN_ID"]}'}, indent=2) + '\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write(f'### Dev APK: {abi}\n\nCommit: `{sha}`. Optimized release profile; experimental build.\n\n'
