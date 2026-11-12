@@ -60,7 +60,10 @@ thread_local! {
 }
 
 /// Kept around vanilla's screen on the lower screen, in its GUI pixels.
-const MARGIN: f32 = 2.0;
+const MARGIN: f32 = 1.0;
+
+/// Vanilla's screen as large as fits, in quarter steps. Off: the largest whole scale.
+const FRACTIONAL_FIT: bool = true;
 
 /// The block a menu type stands for, as the window's icon.
 fn container_icon(menu: &str) -> &'static str {
@@ -128,7 +131,13 @@ impl Game<'_> {
         let [rx, ry, rw, rh] = region;
         let need = [rw + 2.0 * MARGIN, rh + 2.0 * MARGIN];
         let fit = (size[0] as f32 / need[0]).min(size[1] as f32 / need[1]);
-        let scale = fit.floor().max(1.0);
+        // Whole scales keep vanilla's art crisp but can leave a sixth of the screen empty, so
+        // the fit is taken to the nearest quarter below (`FRACTIONAL_FIT`: off, whole ones).
+        let scale = if FRACTIONAL_FIT {
+            ((fit * 4.0).floor() / 4.0).max(1.0)
+        } else {
+            fit.floor().max(1.0)
+        };
         let (w, h) = (
             (size[0] as f32 / scale).ceil(),
             (size[1] as f32 / scale).ceil(),
