@@ -15,6 +15,7 @@ use std::cell::{Cell, RefCell};
 mod ambience;
 mod container;
 mod creative;
+mod dock;
 mod forms;
 mod menu;
 mod screens;

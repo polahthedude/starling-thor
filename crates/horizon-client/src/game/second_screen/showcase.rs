@@ -274,6 +274,10 @@ impl Game<'_> {
             TouchPhase::Ended | TouchPhase::Cancelled if ours => {
                 BOOK_FINGER.set(None);
                 self.window_mouse(events, id, gui, Some(ElementState::Released));
+                // The search box: its keyboard.
+                if crate::platform::field_at(gui) {
+                    self.android_show_keyboard();
+                }
             }
             _ => return false,
         }

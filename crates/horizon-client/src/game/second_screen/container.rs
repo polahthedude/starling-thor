@@ -162,6 +162,16 @@ impl Game<'_> {
         let Some(layout) = self.container_view(size) else {
             return false;
         };
+        // Docked on the window: nothing of the menu here, and a tap puts the keyboard away.
+        if self.dock_amount() > 0.02 {
+            if touches.iter().any(|t| matches!(t, Touch::Down(_))) {
+                crate::platform::hide();
+            }
+            let mut blank = HudBatch::new(size);
+            blank.scale = layout.scale;
+            self.present_lower(&mut blank, MENU_BACKGROUND);
+            return true;
+        }
         let mut batch = HudBatch::new(size);
         batch.scale = layout.scale;
         batch.width = (size[0] as f32 / layout.scale).ceil();
@@ -347,7 +357,9 @@ impl Game<'_> {
                         }
                         let state = Some(ElementState::Released);
                         self.window_mouse(events, id, to_window(p), state);
-                        if creative && crate::platform::field_at(to_window(p)) {
+                        if (creative || self.station_typing())
+                            && crate::platform::field_at(to_window(p))
+                        {
                             self.android_show_keyboard();
                         }
                     } else {
@@ -593,11 +605,15 @@ impl Game<'_> {
             .or_else(|| focus.and_then(|slot| self.creative_stack(slot)));
         let (w, h) = (batch.width, batch.height);
         let center = [(w / 2.0).floor(), (h * 0.40).floor()];
+        // A docked GUI takes the showcase's side; the tooltip would sit where it goes.
+        let (center, dock) = self.dock_place(batch, center);
         let shown = stack
             .clone()
             .unwrap_or_else(|| ItemStack::new("minecraft:chest", 1));
         self.draw_showcase(batch, &shown, center);
-        if let Some(stack) = &stack {
+        if let Some(dock) = dock {
+            self.draw_docked(batch, dock);
+        } else if let Some(stack) = &stack {
             self.draw_showcase_tooltip(batch, stack, true, center);
         }
         let title = {
@@ -734,6 +750,7 @@ impl Game<'_> {
         let left = book_slide(book.map(|[x, _, bw, _]| x + bw + 4.0));
         let span = [left, w - left];
         let center = [(left + span[1] / 2.0).floor(), (h * 0.40).floor()];
+        let (center, dock) = self.dock_place(batch, center);
         match (&stack, menu.as_str()) {
             // The player's own inventory: the player, not a block.
             (None, "inventory") => self.draw_showcase_player(batch, center),
@@ -742,7 +759,9 @@ impl Game<'_> {
                     .clone()
                     .unwrap_or_else(|| ItemStack::new(container_icon(&menu), 1));
                 self.draw_showcase(batch, &shown, center);
-                if let Some(stack) = &stack {
+                if let Some(dock) = dock {
+                    self.draw_docked(batch, dock);
+                } else if let Some(stack) = &stack {
                     self.draw_showcase_tooltip(batch, stack, false, center);
                 }
             }
