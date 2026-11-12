@@ -261,7 +261,7 @@ impl Game<'_> {
                     !self.crafting_screen_open() && self.container_region(&window).is_some();
                 let on_book = vanilla
                     && self
-                        .open_recipe_book_rect(&window)
+                        .open_recipe_book_touch_rect(&window)
                         .is_some_and(|r| super::menu::inside(r, gui));
                 if !on_book || BOOK_FINGER.get().is_some() {
                     return false;

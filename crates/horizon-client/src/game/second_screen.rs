@@ -62,12 +62,20 @@ thread_local! {
     /// The hotbar row's scale and shift (`hud::fit_row`) as last drawn, eased toward the fit
     /// that frame's row needs, and when.
     static FIT: Cell<(f32, f32, Option<std::time::Instant>)> = const { Cell::new((1.0, 0.0, None)) };
+    /// The lower screen's copy of vanilla's container screen is being drawn (the recipe book's
+    /// panel is the window's).
+    static LOWER_PASS: Cell<bool> = const { Cell::new(false) };
     /// A moved screen is being drawn here, with the controller's pointer or focus.
     static DRAWING_LOWER: Cell<bool> = const { Cell::new(false) };
     /// The moved screen's tooltip this frame: shown on the window, off the buttons.
     static LOWER_TOOLTIP: RefCell<Vec<horizon_client::text::Text>> = const { RefCell::new(Vec::new()) };
     /// The title panorama under this frame of the second screen (its yaw and pitch).
     static PANORAMA: Cell<Option<[f32; 2]>> = const { Cell::new(None) };
+}
+
+/// The lower screen's copy of a container screen is being drawn (`container_frame`).
+pub(super) fn lower_pass() -> bool {
+    LOWER_PASS.get()
 }
 
 /// The controller's pointer or focus is being drawn on the second screen (`draw_pad_cursor`).

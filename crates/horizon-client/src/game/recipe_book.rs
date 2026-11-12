@@ -153,6 +153,11 @@ impl Game<'_> {
     /// visible in a window narrower than `NARROW`: the book covers the menu,
     /// so no slot is hovered or clicked.
     pub(super) fn book_covers_menu(&self, width: f32) -> bool {
+        // On a dual screen the menu is on the lower screen, and the book beside it on the window.
+        #[cfg(target_os = "android")]
+        if self.menu_on_lower() {
+            return false;
+        }
         width < NARROW && self.active_book().is_some_and(|b| self.book_open(b))
     }
     /// Whether typed keys go to the search box.
@@ -604,6 +609,14 @@ impl Game<'_> {
         self.refresh_book_view(book);
         self.draw_book_panel(batch, book);
         Some(rect)
+    }
+    /// Where a finger counts as on the open book (the window's): its panel and the tabs
+    /// standing out to its left.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(super) fn open_recipe_book_touch_rect(&self, batch: &HudBatch) -> Option<[f32; 4]> {
+        let [x, y, w, h] = self.open_recipe_book_rect(batch)?;
+        let tabs = 3.0 + 27.0 * self.recipe_ui.view.tabs.len() as f32;
+        Some([x - 30.0, y, w + 30.0, h.max(tabs)])
     }
     fn book_origin(&self, batch: &HudBatch) -> (f32, f32) {
         let offset = if batch.width < NARROW { 0.0 } else { 86.0 };
@@ -1301,7 +1314,13 @@ impl Game<'_> {
             by,
         );
         self.draw_ghost(batch, book_type);
-        if self.book_open(book_type) {
+        // The dual screen's lower copy of the menu leaves the panel to the window above it: it
+        // would be drawn twice (over the menu, in a narrow window).
+        #[cfg(target_os = "android")]
+        let panel_elsewhere = super::second_screen::lower_pass();
+        #[cfg(not(target_os = "android"))]
+        let panel_elsewhere = false;
+        if self.book_open(book_type) && !panel_elsewhere {
             self.refresh_book_view(book_type);
             self.draw_book_panel(batch, book_type);
         }

@@ -31,6 +31,12 @@ struct State {
     /// A finger came down on vanilla's screen off its slots: it holds the window's mouse
     /// button down there (a button, a scrolled list, a field) until it lifts.
     pressing: bool,
+    /// While the window's recipe book is open the controller drives it (Select hands the pad
+    /// back to the slots): the book's control it is on (`book_pad_targets`), and a press to
+    /// make on the window at the next frame.
+    book_pad_off: bool,
+    book_focus: usize,
+    book_press: Option<[f32; 2]>,
 }
 
 thread_local! {
@@ -153,6 +159,11 @@ impl Game<'_> {
             let [x, y] = to_window(p);
             game.slot_at(window, x, y)
         };
+        // The controller's press on the window's recipe book.
+        if let Some(at) = CONTAINER.with_borrow_mut(|s| s.book_press.take()) {
+            self.window_mouse(events, id, at, Some(ElementState::Pressed));
+            self.window_mouse(events, id, at, Some(ElementState::Released));
+        }
         let click = |game: &mut Self, slot: usize| game.container_click(slot, 0, Input::Pickup);
         let pressing = || CONTAINER.with_borrow(|s| s.pressing);
         let set_pressing = |on: bool| CONTAINER.with_borrow_mut(|s| s.pressing = on);
@@ -213,7 +224,9 @@ impl Game<'_> {
             [batch.width, batch.height] = [window.width, window.height];
         }
         let cursor = std::mem::replace(&mut self.cursor, (-10_000.0, -10_000.0));
+        super::LOWER_PASS.set(true);
         self.draw_inventory(&mut batch);
+        super::LOWER_PASS.set(false);
         self.cursor = cursor;
         [batch.width, batch.height] = full;
         batch.clip_since(start, rx, ry, rx + rw, ry + rh);
@@ -291,6 +304,9 @@ impl Game<'_> {
         if super::menu::hotbar_shoulder(self, button) {
             return true;
         }
+        if self.book_pad_input(button) {
+            return true;
+        }
         let rows = self.container_pad_rows();
         let (row, col) = CONTAINER.with_borrow(|s| s.pad);
         let row = row.min(rows.len() - 1);
@@ -318,6 +334,77 @@ impl Game<'_> {
         };
         CONTAINER.with_borrow_mut(|s| s.pad_active = true);
         self.container_click(slot, button, input);
+        true
+    }
+
+    /// The window's open recipe book's controls a controller can be on (not the book button,
+    /// which the lower screen has), in GUI pixels; none while the book is closed.
+    fn book_pad_targets(&self) -> Vec<[f32; 4]> {
+        let Some(window) = self
+            .renderer
+            .as_ref()
+            .map(|r| HudBatch::new([r.config.width, r.config.height]))
+        else {
+            return Vec::new();
+        };
+        if self.open_recipe_book_rect(&window).is_none() {
+            return Vec::new();
+        }
+        self.recipe_book_targets()
+            .into_iter()
+            .skip(1)
+            .map(|t| t.rect)
+            .collect()
+    }
+
+    /// A controller button while the window's recipe book is open and has the pad: the
+    /// directions move to the next control that way, A presses it, Select hands the pad to
+    /// the slots (and back). True when taken.
+    fn book_pad_input(&mut self, button: horizon_client::gamepad::Button) -> bool {
+        use horizon_client::gamepad::Button as B;
+        let targets = self.book_pad_targets();
+        if targets.is_empty() {
+            return false;
+        }
+        let (off, focus) = CONTAINER.with_borrow(|s| (s.book_pad_off, s.book_focus));
+        if button == B::Select {
+            CONTAINER.with_borrow_mut(|s| s.book_pad_off = !off);
+            return true;
+        }
+        if off {
+            return false;
+        }
+        let focus = focus.min(targets.len() - 1);
+        let center = |r: [f32; 4]| [r[0] + r[2] / 2.0, r[1] + r[3] / 2.0];
+        let dir = match button {
+            B::DPadUp => [0.0, -1.0],
+            B::DPadDown => [0.0, 1.0],
+            B::DPadLeft => [-1.0, 0.0],
+            B::DPadRight => [1.0, 0.0],
+            B::South => {
+                let at = center(targets[focus]);
+                CONTAINER.with_borrow_mut(|s| s.book_press = Some(at));
+                return true;
+            }
+            // B and Start go back, as ever; the rest are the slots'.
+            _ => return false,
+        };
+        let from = center(targets[focus]);
+        // The nearest control that way, straighter ones first.
+        let next = targets
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| i != focus)
+            .filter_map(|(i, &r)| {
+                let c = center(r);
+                let (dx, dy) = (c[0] - from[0], c[1] - from[1]);
+                let along = dx * dir[0] + dy * dir[1];
+                let across = (dx * dir[1] + dy * dir[0]).abs();
+                (along > 0.5).then_some((i, along + 2.0 * across))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i);
+        CONTAINER.with_borrow_mut(|s| s.book_focus = next.unwrap_or(focus));
         true
     }
 
@@ -350,6 +437,17 @@ impl Game<'_> {
         // An open recipe book on the left, where vanilla puts it: the rest moves over beside
         // it, easing there.
         let book = self.draw_open_recipe_book(batch);
+        // The controller's place in the book, while it has the pad.
+        let book_pad = book.is_some() && !CONTAINER.with_borrow(|s| s.book_pad_off);
+        if book.is_none() {
+            CONTAINER.with_borrow_mut(|s| (s.book_pad_off, s.book_focus) = (false, 0));
+        } else if book_pad {
+            let targets = self.book_pad_targets();
+            let focus = CONTAINER.with_borrow(|s| s.book_focus);
+            if let Some(&rect) = targets.get(focus.min(targets.len().saturating_sub(1))) {
+                super::menu::highlight(batch, &self.gui.atlas, rect);
+            }
+        }
         let left = book_slide(book.map(|[x, _, bw, _]| x + bw + 4.0));
         let span = [left, w - left];
         let center = [(left + span[1] / 2.0).floor(), (h * 0.40).floor()];
@@ -369,9 +467,17 @@ impl Game<'_> {
             Some(name) => (Some(title.as_str()), name.as_str()),
             None => (None, title.as_str()),
         };
-        let hint = self.pad_hint(
-            "{south} Take All    {north} Take Half    {west} Quick Move    {lb}/{rb} Hotbar    {east} Exit",
-        );
+        let hint = if book_pad {
+            self.pad_hint("D-pad Choose    {south} Select    {select} Slots    {east} Exit")
+        } else if book.is_some() {
+            self.pad_hint(
+                "{south} Take All    {north} Take Half    {west} Quick Move    {select} Book    {east} Exit",
+            )
+        } else {
+            self.pad_hint(
+                "{south} Take All    {north} Take Half    {west} Quick Move    {lb}/{rb} Hotbar    {east} Exit",
+            )
+        };
         self.draw_upper_caption_in(batch, span, heading, Some(name), &hint);
     }
 }
