@@ -481,9 +481,6 @@ impl Game<'_> {
         if self.container_region(&window).is_none() {
             return false;
         }
-        if super::menu::hotbar_shoulder(self, button) {
-            return true;
-        }
         if self.screen == Screen::Creative {
             if let Some(taken) = self.creative_pad_input(&window, button) {
                 return taken;
@@ -614,7 +611,7 @@ impl Game<'_> {
             Some(name) => (Some(title.as_str()), name.as_str()),
             None => (None, title.as_str()),
         };
-        let hint = self.pad_hint("{south} Take    {lb}/{rb} Hotbar    {lt}/{rt} Tab    {east} Exit");
+        let hint = self.pad_hint("{south} Take    {lt}/{rt} Tab    {east} Exit");
         self.draw_upper_caption(batch, heading, Some(name), &hint);
     }
 
@@ -764,7 +761,7 @@ impl Game<'_> {
             )
         } else {
             self.pad_hint(
-                "{south} Take All    {north} Take Half    {west} Quick Move    {lb}/{rb} Hotbar    {east} Exit",
+                "{south} Take All    {north} Take Half    {west} Quick Move    {east} Exit",
             )
         };
         self.draw_upper_caption_in(batch, span, heading, Some(name), &hint);
