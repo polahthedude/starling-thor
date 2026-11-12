@@ -36,7 +36,9 @@ struct State {
     /// make on the window at the next frame.
     book_pad_off: bool,
     book_focus: usize,
-    book_press: Option<[f32; 2]>,
+    book_press: Option<([f32; 2], bool)>,
+    /// The control a recipe was last placed from: A on it again takes the craft.
+    book_placed: Option<usize>,
 }
 
 thread_local! {
@@ -160,9 +162,19 @@ impl Game<'_> {
             game.slot_at(window, x, y)
         };
         // The controller's press on the window's recipe book.
-        if let Some(at) = CONTAINER.with_borrow_mut(|s| s.book_press.take()) {
-            self.window_mouse(events, id, at, Some(ElementState::Pressed));
-            self.window_mouse(events, id, at, Some(ElementState::Released));
+        if let Some((at, again)) = CONTAINER.with_borrow_mut(|s| s.book_press.take()) {
+            // A again on the recipe just placed: its craft is in the result slot, take it.
+            if again && self.slot_view(200).is_some() {
+                CONTAINER.with_borrow_mut(|s| s.book_placed = None);
+                self.container_click(200, 0, Input::QuickMove);
+            } else {
+                // The book's own click, at the control, not a mouse the window has to catch up
+                // with.
+                self.cursor = (at[0], at[1]);
+                self.recipe_book_click(false);
+                self.recipe_book_release();
+                CONTAINER.with_borrow_mut(|s| s.book_placed = Some(s.book_focus));
+            }
         }
         let click = |game: &mut Self, slot: usize| game.container_click(slot, 0, Input::Pickup);
         let pressing = || CONTAINER.with_borrow(|s| s.pressing);
@@ -383,7 +395,9 @@ impl Game<'_> {
             B::DPadRight => [1.0, 0.0],
             B::South => {
                 let at = center(targets[focus]);
-                CONTAINER.with_borrow_mut(|s| s.book_press = Some(at));
+                CONTAINER.with_borrow_mut(|s| {
+                    s.book_press = Some((at, s.book_placed == Some(focus)));
+                });
                 return true;
             }
             // B and Start go back, as ever; the rest are the slots'.
@@ -404,7 +418,10 @@ impl Game<'_> {
             })
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(i, _)| i);
-        CONTAINER.with_borrow_mut(|s| s.book_focus = next.unwrap_or(focus));
+        CONTAINER.with_borrow_mut(|s| {
+            s.book_focus = next.unwrap_or(focus);
+            s.book_placed = None;
+        });
         true
     }
 

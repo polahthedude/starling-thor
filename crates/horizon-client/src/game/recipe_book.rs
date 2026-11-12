@@ -1072,6 +1072,11 @@ impl Game<'_> {
     /// that is not offset next to the menu (`!isOffsetNextToMainGUI`, a window
     /// narrower than `NARROW`) closes with `setVisible(false)`.
     fn close_narrow_book(&mut self, book_type: BookType, batch: &HudBatch) {
+        // On a dual screen the book is beside the menu, which is on the other screen.
+        #[cfg(target_os = "android")]
+        if self.menu_on_lower() {
+            return;
+        }
         if batch.width >= NARROW {
             return;
         }

@@ -16677,7 +16677,7 @@ impl Game<'_> {
             }
             match self.android_aux_touch(touch, event_loop, id) {
                 Ok(true) => return,
-                Ok(false) => {}
+                Ok(false) => {} 
                 Err(error) => {
                     log::error!("Android input: {error}");
                     return;
