@@ -565,6 +565,8 @@ impl Game<'_> {
                     batch.text_styled(atlas, cause, x, 85.0, u32::MAX, true);
                 }
             }
+            // The pause menu, as the window draws it (`hud_layers`).
+            Screen::Paused if self.pause_menu => self.draw_pause_menu(batch),
             Screen::Stats => self.draw_stats(batch),
             Screen::Advancements => self.draw_advancements(batch),
             Screen::WorldOptions => self.draw_world_options(batch),
