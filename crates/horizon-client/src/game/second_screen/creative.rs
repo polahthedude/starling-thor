@@ -22,8 +22,8 @@ use std::time::Instant;
 enum Finger {
     /// On the grid: where it came down, the scroll then, and whether it has swiped.
     Grid { y: f32, from: f32, swiped: bool },
-    /// Holding the scrollbar.
-    Track,
+    /// Holding the scrollbar, this far below the thumb's middle (0 when it jumped there).
+    Track { grab: f32 },
     /// On the tab bar: where it came down, the tabs' scroll then, and whether it has swiped.
     Tabs { x: f32, from: f32, swiped: bool },
 }
@@ -343,8 +343,17 @@ impl Game<'_> {
             self.creative_scroll_to((target + page).min(max), false);
             self.android_touch_haptic(8);
         } else if inside(grid.track, p) {
-            CREATIVE.with_borrow_mut(|s| s.finger = Some(Finger::Track));
-            self.creative_track(&grid, max, p[1]);
+            // Down on the thumb: hold it where it is, without it jumping under the finger.
+            let [_, ty, _, th] = grid.track;
+            let thumb = dual_menu::SCROLLER[1];
+            let middle = ty + thumb / 2.0 + (at / max.max(1.0)) * (th - thumb).max(0.0);
+            let grab = if max > 0.0 && (p[1] - middle).abs() <= thumb / 2.0 {
+                p[1] - middle
+            } else {
+                0.0
+            };
+            CREATIVE.with_borrow_mut(|s| s.finger = Some(Finger::Track { grab }));
+            self.creative_track(&grid, max, p[1] - grab);
         } else if inside(Self::creative_grid_area(&grid), p) {
             let finger = Finger::Grid {
                 y: p[1],
@@ -377,7 +386,7 @@ impl Game<'_> {
         let (grid, _, max, _) = self.creative_layout(dims, tabs);
         match finger {
             Finger::Tabs { .. } => {}
-            Finger::Track => self.creative_track(&grid, max, p[1]),
+            Finger::Track { grab } => self.creative_track(&grid, max, p[1] - grab),
             Finger::Grid { y, from, swiped } => {
                 let dy = p[1] - y;
                 let swiped = swiped || dy.abs() > 4.0;

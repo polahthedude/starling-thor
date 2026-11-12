@@ -834,7 +834,7 @@ impl Game<'_> {
         }
         // The world under the inventory and creative screens (blurred, by `menu_blur`): clear
         // at the top, darkening to near black at the bottom, where the text is.
-        if matches!(self.screen, Screen::Inventory | Screen::Creative) {
+        if matches!(self.screen, Screen::Inventory | Screen::Creative | Screen::Paused) {
             let (w, h) = (batch.width, batch.height);
             let top = (h * 0.15).floor();
             batch.fill_gradient(&self.gui.atlas, (0.0, top, w, h - top), 0, 0xE000_0000);
@@ -845,7 +845,13 @@ impl Game<'_> {
             }
             return self.draw_creative_upper(batch);
         }
-        if self.screen == Screen::Paused && !super::VANILLA_PAUSE {
+        if self.screen == Screen::Paused {
+            if super::VANILLA_PAUSE {
+                // The caption as the inventory's: the name along the bottom, the controls under.
+                let title = self.translate("menu.game", "Game Menu");
+                let hint = self.pad_hint("{south} Select    {east} Back");
+                return self.draw_upper_caption(batch, None, Some(&title), &hint);
+            }
             return self.draw_pause_upper(batch);
         }
         if self.screen == Screen::Inventory && !self.crafting_screen_open() {

@@ -8175,6 +8175,8 @@ impl Game<'_> {
         #[cfg(not(target_os = "android"))]
         let dual = false;
         let mut boss_bars = 0..0;
+        // The health, food, air, experience and locator bars' vertices, kept sharp under a menu.
+        let mut status_bars = 0..0;
         // max(Hud.leftHeight, Hud.rightHeight) after the bars: the item name and
         // the action bar sit above it.
         let mut bar_height = 39;
@@ -8371,6 +8373,7 @@ impl Game<'_> {
                     1.0,
                 );
             }
+            status_bars = band..batch.vertices.len();
             if !spectator {
                 // Dual screen: where the hotbar was, the bars being at the top.
                 let bar_height = if dual { 39 } else { bar_height };
@@ -8400,6 +8403,22 @@ impl Game<'_> {
         // Screen.extractBlurredBackground blurs the world and HUD, while the
         // screen's background, widgets, toasts and debug overlay stay sharp.
         batch.blur_at = batch.vertices.len() as u32;
+        // The status bars are drawn after the blur, sharp, as the rest of the HUD under it is not.
+        let (lo, hi) = (status_bars.start as u32, status_bars.end as u32);
+        if self.menu_blur().is_some()
+            && !status_bars.is_empty()
+            && batch.blends.iter().all(|(r, _)| r.end <= lo || r.start >= hi)
+        {
+            let bars: Vec<_> = batch.vertices.drain(status_bars.clone()).collect();
+            let n = bars.len() as u32;
+            batch.blur_at -= n;
+            for (r, _) in &mut batch.blends {
+                if r.start >= hi {
+                    *r = r.start - n..r.end - n;
+                }
+            }
+            batch.vertices.extend(bars);
+        }
         // PackConfirmScreen takes the open screen's place (it comes back once
         // the prompt is answered): the screen under the prompt isn't drawn.
         // Dual screen: the inventory and containers draw on the second screen instead.

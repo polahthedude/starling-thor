@@ -327,15 +327,7 @@ impl Game<'_> {
                     let p = [x / layout.scale, y / layout.scale];
                     if let Some((start, _, moved)) = CONTAINER.with_borrow_mut(|s| s.swipe.take()) {
                         if moved {
-                            // Lifted while still moving: it coasts on.
-                            CONTAINER.with_borrow_mut(|s| {
-                                let moving = s
-                                    .swipe_speed
-                                    .1
-                                    .is_some_and(|t| t.elapsed().as_millis() < 80);
-                                s.fling = if moving && s.swipe_speed.0.abs() > 2.0 {
-                                    (s.swipe_speed.0, Some(std::time::Instant::now()))
-                                } else {
+                        } else {
                                     (0.0, None)
                                 };
                             });
@@ -349,20 +341,8 @@ impl Game<'_> {
                     }
                     if pressing() {
                         set_pressing(false);
-                        // The scrollbar's thumb let go of while moving: the grid coasts on.
                         if creative && self.creative_screen.scrolling {
-                            let hidden = self.creative_screen.rows(&self.pack.names).saturating_sub(5);
-                            CONTAINER.with_borrow_mut(|s| {
-                                let moving =
-                                    s.thumb.1.is_some_and(|t| t.elapsed().as_millis() < 80);
-                                let rows = -s.thumb.2 * hidden as f32;
-                                s.fling = if moving && rows.abs() > 2.0 {
-                                    (rows, Some(std::time::Instant::now()))
-                                } else {
-                                    (0.0, None)
-                                };
-                                s.thumb = (0.0, None, 0.0);
-                            });
+                            CONTAINER.with_borrow_mut(|s| s.thumb = (0.0, None, 0.0));
                         }
                         let state = Some(ElementState::Released);
                         self.window_mouse(events, id, to_window(p), state);
@@ -388,22 +368,6 @@ impl Game<'_> {
             let row = self.creative_screen.first_row(&self.pack.names);
             if CONTAINER.with_borrow_mut(|s| std::mem::replace(&mut s.row, row)) != row {
                 self.android_touch_haptic(4);
-            }
-        }
-        // The grid coasting after a swipe: slowing, and stopped at either end.
-        if creative && CONTAINER.with_borrow(|s| s.swipe.is_none()) {
-            let (speed, since) = CONTAINER.with_borrow(|s| s.fling);
-            if let (true, Some(t)) = (speed != 0.0, since) {
-                let now = std::time::Instant::now();
-                let dt = now.duration_since(t).as_secs_f32().min(0.1);
-                self.creative_screen
-                    .wheel(f64::from(speed * dt), &self.pack.names);
-                let scroll = self.creative_screen.scroll;
-                let speed = speed * (-3.0 * dt).exp();
-                let stopped = speed.abs() < 0.5 || scroll <= 0.0 || scroll >= 1.0;
-                CONTAINER.with_borrow_mut(|s| {
-                    s.fling = if stopped { (0.0, None) } else { (speed, Some(now)) };
-                });
             }
         }
         let right = |game: &mut Self, slot: usize| game.container_click(slot, 1, Input::Pickup);
@@ -756,6 +720,10 @@ impl Game<'_> {
                 super::menu::highlight(batch, &self.gui.atlas, rect);
             }
         }
+        // The recipe under the finger in the book is shown too, over the slot's.
+        let stack = book
+            .and_then(|_| self.recipe_ui.hovered.clone())
+            .or(stack);
         let left = book_slide(book.map(|[x, _, bw, _]| x + bw + 4.0));
         let span = [left, w - left];
         let center = [(left + span[1] / 2.0).floor(), (h * 0.40).floor()];

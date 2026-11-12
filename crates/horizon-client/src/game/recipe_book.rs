@@ -67,6 +67,8 @@ pub(super) struct RecipeUi {
     tab: Option<Tab>,
     search: Option<EditBox>,
     page: usize,
+    /// The stack under the cursor in the last frame's book, for the window's showcase.
+    pub(super) hovered: Option<ItemStack>,
     /// Ticks, for the ghost and button cycling (`RecipeBookComponent.time`).
     time: f32,
     ghost: Vec<Ghost>,
@@ -1580,6 +1582,7 @@ impl Game<'_> {
             text_width: &text_width,
         };
         let calls = screen::draw(&layout);
+        self.recipe_ui.hovered = None;
         let tooltip = self.paint_book(batch, &calls);
         // The squeeze animations run down with the frames.
         let frame = self.frame_ticks;
@@ -1711,6 +1714,7 @@ impl Game<'_> {
                 }
                 Call::ItemTooltip { stack, more } => {
                     if tooltip.is_none() {
+                        self.recipe_ui.hovered = Some(stack.clone());
                         let mut lines = self.stack_tooltip(stack);
                         if *more {
                             lines.push((
