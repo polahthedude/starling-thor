@@ -41,6 +41,10 @@ struct State {
     book_placed: Option<usize>,
     /// The creative screen's slot the controller pressed, in window pixels, for the next frame.
     creative_press: Option<[f32; 2]>,
+    /// A finger on the creative grid: where it came down (lower screen's pixels), the height
+    /// it last scrolled from, and whether it has swiped. A tap that never swiped presses the
+    /// slot when it lifts.
+    swipe: Option<([f32; 2], f32, bool)>,
 }
 
 thread_local! {
@@ -166,6 +170,19 @@ impl Game<'_> {
         // The creative screen is the window's mouse all over (its tabs, scrollbar and slots as
         // vanilla's), so no slot is the frame's own there.
         let creative = self.screen == Screen::Creative;
+        // The creative grid's five rows of nine, where a swipe scrolls.
+        let grid_area = window
+            .as_ref()
+            .map(|w| {
+                let (ox, oy) = self.inventory_origin(w);
+                [
+                    ox + 9.0 + layout.offset[0],
+                    oy + 18.0 + layout.offset[1],
+                    162.0,
+                    90.0,
+                ]
+            })
+            .unwrap_or_default();
         let slot_at = |game: &Self, p: [f32; 2]| {
             let window = window
                 .as_ref()
@@ -200,6 +217,15 @@ impl Game<'_> {
                 Touch::Down([x, y]) => {
                     let p = [x / layout.scale, y / layout.scale];
                     CONTAINER.with_borrow_mut(|s| (s.at, s.pad_active) = (p, false));
+                    // The creative grid: a swipe scrolls it, a tap takes what is under the
+                    // finger once it lifts.
+                    if creative
+                        && inside(grid_area, p)
+                        && self.creative_screen.can_scroll(&self.pack.names)
+                    {
+                        CONTAINER.with_borrow_mut(|s| s.swipe = Some((p, p[1], false)));
+                        continue;
+                    }
                     if creative && let Some(window) = window.as_ref() {
                         // The item under the finger is the one the window shows.
                         let [x, y] = to_window(p);
@@ -222,6 +248,17 @@ impl Game<'_> {
                 Touch::Move([x, y]) => {
                     let p = [x / layout.scale, y / layout.scale];
                     CONTAINER.with_borrow_mut(|s| s.at = p);
+                    if let Some((start, last, moved)) = CONTAINER.with_borrow(|s| s.swipe) {
+                        let moved = moved || (p[0] - start[0]).hypot(p[1] - start[1]) > 6.0;
+                        if moved {
+                            // A row is 18 pixels: the grid follows the finger.
+                            let rows = f64::from((p[1] - last) / 18.0);
+                            self.creative_screen.wheel(rows, &self.pack.names);
+                        }
+                        let last = if moved { p[1] } else { last };
+                        CONTAINER.with_borrow_mut(|s| s.swipe = Some((start, last, moved)));
+                        continue;
+                    }
                     if pressing() {
                         self.window_mouse(events, id, to_window(p), None);
                     } else {
@@ -230,6 +267,14 @@ impl Game<'_> {
                 }
                 Touch::Up([x, y]) => {
                     let p = [x / layout.scale, y / layout.scale];
+                    if let Some((start, _, moved)) = CONTAINER.with_borrow_mut(|s| s.swipe.take()) {
+                        if !moved {
+                            let at = to_window(start);
+                            self.window_mouse(events, id, at, Some(ElementState::Pressed));
+                            self.window_mouse(events, id, at, Some(ElementState::Released));
+                        }
+                        continue;
+                    }
                     if pressing() {
                         set_pressing(false);
                         let state = Some(ElementState::Released);
