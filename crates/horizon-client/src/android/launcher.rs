@@ -68,6 +68,8 @@ pub(super) struct Launcher {
     session_ready: bool,
     prepared_session: Option<PathBuf>,
     pub(super) launching: bool,
+    /// A home-screen shortcut asked to start straight into the game (once, on the first open).
+    shortcut_launch: bool,
     pub(super) launch_pending_tick: bool,
     pub(super) diagnostics_modal_open: bool,
     focus: Option<usize>,
@@ -144,6 +146,16 @@ impl Launcher {
                 log::warn!("Could not save graphics recovery choice: {error}");
             }
             catalog.status = "Previous Vulkan startup was interrupted. Using Vulkan compatibility; you can change Rendering mode in Settings.".into();
+        }
+        // A home-screen shortcut names a profile: use it (the Play path saves it as the active
+        // one) and start the game at once, if the game is installed. A stale shortcut for a
+        // deleted profile opens the launcher as usual.
+        let shortcut = crate::platform::shortcut_profile()
+            .and_then(|raw| crate::catalog::Config::shortcut_profile(&home, raw));
+        let mut shortcut_launch = false;
+        if let Some(profile) = shortcut {
+            catalog.config.profile = profile;
+            shortcut_launch = horizon_client::official_install::ready(&home);
         }
         crate::configure_input_mode(catalog.config.input_host);
         crate::device_runtime::configure(catalog.config.device);
@@ -246,6 +258,7 @@ impl Launcher {
             session_ready: false,
             prepared_session: None,
             launching: false,
+            shortcut_launch,
             launch_pending_tick: false,
             diagnostics_modal_open: false,
             focus: None,
@@ -693,6 +706,13 @@ impl ApplicationHandler for Launcher {
         if let Err(error) = self.open(events) {
             self.fail(error);
             events.exit();
+            return;
+        }
+        if std::mem::take(&mut self.shortcut_launch) {
+            self.launch_pending_tick = true;
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
         }
     }
     fn suspended(&mut self, events: &ActiveEventLoop) {

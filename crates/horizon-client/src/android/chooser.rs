@@ -243,6 +243,12 @@ impl Launcher {
                         false,
                     ));
                 }
+                choices.push((
+                    "Add to home screen".into(),
+                    format!("Start Profile {} straight into the game", c.profile),
+                    Action::PinProfileShortcut(c.profile),
+                    false,
+                ));
                 (
                     "Choose profile",
                     "Each profile keeps its own game settings and saves.",

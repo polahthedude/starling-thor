@@ -20,6 +20,37 @@ public final class HorizonActivity extends android.app.NativeActivity {
     private android.app.Presentation secondScreen;
     private android.hardware.display.DisplayManager.DisplayListener displays;
 
+    /** Intent extra of a home-screen shortcut: the profile number to start straight into. */
+    private static final String PROFILE_EXTRA = "horizon.profile";
+
+    /** The profile this launch's shortcut asked for, or -1 for an ordinary launch. */
+    public int shortcutProfile() {
+        return getIntent() == null ? -1 : getIntent().getIntExtra(PROFILE_EXTRA, -1);
+    }
+
+    /**
+     * Asks the home screen to pin a shortcut that starts {@code profile} directly. It targets the
+     * launcher alias, so the game still opens on the main display. False when the home screen
+     * can't pin shortcuts (the user is then asked nothing).
+     */
+    public boolean pinProfileShortcut(int profile, String label) {
+        android.content.pm.ShortcutManager manager =
+                getSystemService(android.content.pm.ShortcutManager.class);
+        if (manager == null || !manager.isRequestPinShortcutSupported()) return false;
+        android.content.Intent launch = new android.content.Intent(android.content.Intent.ACTION_MAIN)
+                .setClassName(getPackageName(), "com.google.androidgamesdk.GameActivity")
+                .putExtra(PROFILE_EXTRA, profile);
+        android.content.pm.ShortcutInfo info = new android.content.pm.ShortcutInfo.Builder(
+                this, "profile-" + profile)
+                .setShortLabel(label)
+                .setLongLabel(label)
+                .setIcon(android.graphics.drawable.Icon.createWithResource(
+                        this, getApplicationInfo().icon))
+                .setIntent(launch)
+                .build();
+        return manager.requestPinShortcut(info, null);
+    }
+
     /** From the game (any thread): show or hide the second screen, if there is one. */
     public void setSecondScreen(boolean wanted) {
         runOnUiThread(() -> {

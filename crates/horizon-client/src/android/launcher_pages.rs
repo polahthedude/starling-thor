@@ -300,6 +300,7 @@ pub(super) enum Action {
     ChooseOrientation(crate::catalog::Orientation),
     ChooseRenderer(crate::catalog::RendererMode),
     ChooseProfile(u32),
+    PinProfileShortcut(u32),
     Dismiss,
     Immersive,
     Cutout,
@@ -6335,6 +6336,17 @@ impl Launcher {
                 self.catalog.config.profile = profile;
                 self.catalog.config.save(&self.home)?;
                 self.catalog.refresh(&self.home);
+                self.chooser = None;
+            }
+            Some(Action::PinProfileShortcut(profile)) => {
+                self.catalog.status = if crate::platform::pin_profile_shortcut(
+                    profile,
+                    &crate::catalog::Config::profile_label(profile),
+                ) {
+                    "Confirm the shortcut on your home screen.".into()
+                } else {
+                    "This home screen can't add shortcuts.".into()
+                };
                 self.chooser = None;
             }
             Some(Action::Dismiss) => {

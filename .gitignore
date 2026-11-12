@@ -59,3 +59,10 @@
 
 # Local PR description draft.
 /PR_DESCRIPTION.txt
+
+# IDE state (machine-local; nested project folders and device caches)
+/.idea/caches/
+/.idea/workspace.xml
+**/.idea/caches/
+crates/horizon-android/.idea/
+packaging/android/.idea/

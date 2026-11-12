@@ -208,6 +208,20 @@ impl Config {
         // Legacy modpack selections are ignored; their files remain untouched.
         self.profile_home(home)
     }
+    /// The profile a shortcut's intent names, if it is a profile that exists on this device.
+    /// The extra is untrusted input: it is checked, never turned into a path unchecked.
+    pub fn shortcut_profile(home: &Path, raw: i32) -> Option<u32> {
+        let id = u32::try_from(raw).ok()?;
+        let exists = id == 0
+            || home
+                .join("profiles")
+                .join(format!("profile-{id}"))
+                .is_dir();
+        exists.then_some(id)
+    }
+    pub fn profile_label(profile: u32) -> String {
+        format!("Horizon - Profile {profile}")
+    }
     pub fn touch_name_changed(&mut self) {
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -2211,4 +2225,18 @@ fn clean_markdown_body(raw: &str) -> String {
         }
     }
     out.join("\n")
+}
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+    #[test]
+    fn a_shortcut_starts_only_profiles_that_exist() {
+        let home = std::env::temp_dir().join(format!("horizon-shortcut-{}", std::process::id()));
+        std::fs::create_dir_all(home.join("profiles/profile-3")).unwrap();
+        assert_eq!(Config::shortcut_profile(&home, 0), Some(0));
+        assert_eq!(Config::shortcut_profile(&home, 3), Some(3));
+        assert_eq!(Config::shortcut_profile(&home, 4), None);
+        assert_eq!(Config::shortcut_profile(&home, -1), None);
+        std::fs::remove_dir_all(&home).unwrap();
+    }
 }

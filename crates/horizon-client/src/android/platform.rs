@@ -292,6 +292,27 @@ pub fn cache_dir() -> Option<std::path::PathBuf> {
     })
 }
 
+/// The profile a home-screen shortcut asked for (`HorizonActivity.shortcutProfile`), if any.
+pub fn shortcut_profile() -> Option<i32> {
+    with_context(|env, activity| {
+        Ok(env.call_method(activity, "shortcutProfile", "()I", &[])?.i()?)
+    })
+    .filter(|profile| *profile >= 0)
+}
+/// Asks the home screen to pin a shortcut that starts `profile`. False when it can't.
+pub fn pin_profile_shortcut(profile: u32, label: &str) -> bool {
+    with_context(|env, activity| {
+        let label = JObject::from(env.new_string(label)?);
+        env.call_method(
+            activity,
+            "pinProfileShortcut",
+            "(ILjava/lang/String;)Z",
+            &[JValue::Int(profile as i32), JValue::Object(&label)],
+        )?
+        .z()
+    })
+    .unwrap_or(false)
+}
 pub fn open_repository() -> bool {
     open_url("https://github.com/Vasysik/horizon-android")
 }
