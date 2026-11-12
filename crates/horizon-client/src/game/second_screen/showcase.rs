@@ -388,8 +388,8 @@ impl Game<'_> {
         self.draw_upper_caption_in(batch, span, heading, name, hint);
     }
 
-    /// [`Self::draw_upper_caption`] centred across `[x, width]` of the window (beside a
-    /// recipe book).
+    /// [`Self::draw_upper_caption`] with the heading and name centred across `[x, width]` of the
+    /// window (beside a recipe book); the controls stay centred on the whole window.
     pub(super) fn draw_upper_caption_in(
         &self,
         batch: &mut HudBatch,
@@ -401,7 +401,8 @@ impl Game<'_> {
         let atlas = &self.gui.atlas;
         let h = batch.height;
         let hint_y = (h - 14.0).floor();
-        centered(batch, atlas, hint, [x0, hint_y, w], 0xFFCC_CCCC, true);
+        // The controls stay put across the whole window; only the name moves aside for a book.
+        centered(batch, atlas, hint, [0.0, hint_y, batch.width], 0xFFCC_CCCC, true);
         let name_y = hint_y - 26.0;
         if let Some(name) = name {
             let tw = HudBatch::text_width(atlas, name).max(1.0);
