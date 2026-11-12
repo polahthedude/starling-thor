@@ -46,6 +46,7 @@ fn container_icon(menu: &str) -> &'static str {
         m if m.starts_with("generic_9x") => "minecraft:chest",
         "generic_3x3" => "minecraft:dispenser",
         "crafter_3x3" => "minecraft:crafter",
+        "crafting" => "minecraft:crafting_table",
         "furnace" => "minecraft:furnace",
         "blast_furnace" => "minecraft:blast_furnace",
         "smoker" => "minecraft:smoker",
@@ -352,10 +353,16 @@ impl Game<'_> {
         let left = book_slide(book.map(|[x, _, bw, _]| x + bw + 4.0));
         let span = [left, w - left];
         let center = [(left + span[1] / 2.0).floor(), (h * 0.40).floor()];
-        let shown = stack
-            .clone()
-            .unwrap_or_else(|| ItemStack::new(container_icon(&menu), 1));
-        self.draw_showcase(batch, &shown, center);
+        match (&stack, menu.as_str()) {
+            // The player's own inventory: the player, not a block.
+            (None, "inventory") => self.draw_showcase_player(batch, center),
+            _ => {
+                let shown = stack
+                    .clone()
+                    .unwrap_or_else(|| ItemStack::new(container_icon(&menu), 1));
+                self.draw_showcase(batch, &shown, center);
+            }
+        }
         let name =
             stack.map(|s| item_tooltip::name_line(&s, &|key| self.pack.names.display_get(key)));
         let (heading, name) = match &name {

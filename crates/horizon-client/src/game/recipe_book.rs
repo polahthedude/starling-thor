@@ -843,11 +843,13 @@ impl Game<'_> {
     pub(super) fn recipe_book_release(&mut self) {
         self.recipe_ui.search_drag = false;
     }
-    /// The open screen is the player's inventory or a crafting table: a crafting grid with the
-    /// crafting book (the dual screen draws its own crafting for it).
+    /// The open screen is the player's inventory or a crafting table, and the dual screen draws
+    /// Legacy Console Edition's own crafting for it. Off: it lays them out as every other
+    /// container (vanilla's screen below, the recipe book above).
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub(super) fn crafting_screen_open(&self) -> bool {
-        self.active_book() == Some(BookType::Crafting)
+        const LEGACY_CRAFTING: bool = false;
+        LEGACY_CRAFTING && self.active_book() == Some(BookType::Crafting)
     }
     /// Legacy Console Edition's crafting on the dual screen: the groups (`RecipeCollection`)
     /// the player's book holds that fit the open grid and go in Legacy tab `tab`
