@@ -832,9 +832,9 @@ impl Game<'_> {
         if !self.screen_on_second_screen() {
             return;
         }
-        // The world under the inventory and creative screens (blurred, by `menu_blur`): clear
+        // The world under the screens on the lower screen (blurred, by `menu_blur`): clear
         // at the top, darkening to near black at the bottom, where the text is.
-        if matches!(self.screen, Screen::Inventory | Screen::Creative | Screen::Paused) {
+        if self.screen != Screen::Dead {
             let (w, h) = (batch.width, batch.height);
             let top = (h * 0.15).floor();
             batch.fill_gradient(&self.gui.atlas, (0.0, top, w, h - top), 0, 0xE000_0000);

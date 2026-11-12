@@ -68,6 +68,8 @@ struct Doll {
 }
 
 thread_local! {
+    /// The item the showcase's tooltip is for and when it was first shown, for its fade-in.
+    static TOOLTIP_SINCE: RefCell<Option<(String, Instant, Instant)>> = const { RefCell::new(None) };
     /// The finger on the window's recipe book, pressing the window's mouse there.
     static BOOK_FINGER: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     static DOLL: RefCell<Doll> = RefCell::new(Doll::default());
@@ -323,10 +325,51 @@ impl Game<'_> {
         if self.stack_tooltip_lines(stack, false, creative).len() < 2 {
             return;
         }
-        // To the right of the item, kept on the window.
-        let x = center[0] + 16.0 * SCALE * 0.6;
+        // Beside the item, never over it: to its right, or its left where that doesn't fit.
+        let lines = Self::resolved(&self.stack_tooltip_lines(stack, false, creative));
+        let (_, _, tw, _) = Self::tooltip_geometry(
+            &self.gui.atlas,
+            &lines,
+            (0.0, 0.0),
+            (batch.width, batch.height),
+            [0.0; 2],
+        );
+        let gap = 16.0 * SCALE / 2.0 + 10.0;
+        // `tooltip_position` puts the box 12 right of the point it is given.
+        let right = center[0] + gap;
+        let left = if right + tw + 8.0 <= batch.width {
+            right
+        } else {
+            (center[0] - gap - tw).max(8.0)
+        };
         let y = center[1] - 24.0;
-        self.draw_stack_tooltip_with(batch, stack, creative, x, y, Vec::new());
+        // Faded in after the item has settled (a book sliding the showcase over moves it), so
+        // it never shows on the side the item is leaving.
+        let key = format!("{}#{}", stack.item, stack.count);
+        // Starts over for a new item, or the same one shown again after a gap.
+        let since = TOOLTIP_SINCE.with_borrow_mut(|t| {
+            let now = Instant::now();
+            match t {
+                Some((k, at, last)) if *k == key && now.duration_since(*last).as_millis() < 300 => {
+                    *last = now;
+                    *at
+                }
+                _ => {
+                    *t = Some((key, now, now));
+                    now
+                }
+            }
+        });
+        let alpha = ((since.elapsed().as_secs_f32() - 0.15) / 0.2).clamp(0.0, 1.0);
+        if alpha <= 0.0 {
+            return;
+        }
+        let start = batch.vertices.len();
+        self.draw_stack_tooltip_with(batch, stack, creative, left - 12.0, y, Vec::new());
+        for v in &mut batch.vertices[start..] {
+            let a = ((v.color >> 24) as f32 * alpha).round() as u32;
+            v.color = a << 24 | v.color & 0x00FF_FFFF;
+        }
     }
 
     /// The player standing around `center` (GUI pixels), holding what the hotbar holds: a

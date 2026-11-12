@@ -91,7 +91,8 @@ type Spec<'a> = (&'a str, &'a str, String, Kind, u8, usize, bool);
 
 impl Game<'_> {
     pub(super) fn form_on_second_screen(&self) -> bool {
-        !matches!(self.screen, Screen::Options | Screen::Mod)
+        !super::VANILLA_WORLDS
+            && !matches!(self.screen, Screen::Options | Screen::Mod)
             && self.title.as_ref().is_some_and(|t| {
                 matches!(t.mode, Mode::Create { .. } | Mode::Edit { .. }) && !t.overlay_open()
             })

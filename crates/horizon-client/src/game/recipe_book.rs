@@ -69,6 +69,9 @@ pub(super) struct RecipeUi {
     page: usize,
     /// The stack under the cursor in the last frame's book, for the window's showcase.
     pub(super) hovered: Option<ItemStack>,
+    /// The dual screen's window shows the hovered stack's tooltip itself, beside the showcase:
+    /// the book draws none.
+    no_tooltip: bool,
     /// Ticks, for the ghost and button cycling (`RecipeBookComponent.time`).
     time: f32,
     ghost: Vec<Ghost>,
@@ -429,11 +432,8 @@ impl Game<'_> {
         self.craft_size.hash(&mut h);
         self.recipe_ui.client_version.hash(&mut h);
         self.book_filtering(book_type).hash(&mut h);
-        self.recipe_ui
-            .tab
-            .as_ref()
-            .map(std::mem::discriminant)
-            .hash(&mut h);
+        // The tab itself: its discriminant alone is the same for every category.
+        self.recipe_ui.tab.hash(&mut h);
         self.recipe_ui
             .search
             .as_ref()
@@ -609,7 +609,9 @@ impl Game<'_> {
         let book = self.active_book()?;
         self.ensure_book();
         self.refresh_book_view(book);
+        self.recipe_ui.no_tooltip = true;
         self.draw_book_panel(batch, book);
+        self.recipe_ui.no_tooltip = false;
         Some(rect)
     }
     /// Where a finger counts as on the open book (the window's): its panel and the tabs
@@ -1594,7 +1596,9 @@ impl Game<'_> {
         }
         self.recipe_ui.tab_anim.retain(|e| e.1 > 0.0);
         self.recipe_ui.button_anim.retain(|e| e.1 > 0.0);
-        if let Some(lines) = tooltip {
+        if let Some(lines) = tooltip
+            && !self.recipe_ui.no_tooltip
+        {
             self.draw_tooltip_lines(batch, &lines, cursor.0, cursor.1);
         }
     }

@@ -181,8 +181,7 @@ pub fn hotbar_slot(width: f32, height: f32, point: [f32; 2]) -> Option<usize> {
 }
 /// A dual-screen handheld's lower screen, laid out after New 3DS Edition's touch screen, in GUI
 /// pixels: the hotbar along the top on a dark band, the coordinates on a dark strip under it,
-/// then a square map on the left and a column of three buttons (inventory, crafting, pause) on
-/// the right, together as tall as the map.
+/// then a square map on the left and, as tall as the map, a 3 by 3 grid of buttons on the right.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DualPanel {
     /// The band's height: the 22-pixel hotbar, 1 pixel from the top.
@@ -196,8 +195,9 @@ pub struct DualPanel {
     /// The frame holding the map, the buttons and the info line.
     pub frame: [f32; 4],
     pub map: [f32; 4],
-    /// Inventory, crafting, chat, pause.
-    pub buttons: [[f32; 4]; 4],
+    /// Inventory (2 by 2, top right), pause (2 by 1, bottom right), chat (bottom left), then
+    /// the advancements and the camera (1 by 1, above chat).
+    pub buttons: [[f32; 4]; 5],
 }
 /// About 200 GUI pixels across, so the hotbar spans the screen as on the 3DS.
 pub fn dual_panel_scale(width_px: u32) -> f32 {
@@ -205,9 +205,10 @@ pub fn dual_panel_scale(width_px: u32) -> f32 {
 }
 /// The panel's layout, `width` by `height` GUI pixels: the sky under all of it, the hotbar band
 /// over its top, and a frame along the bottom (8 pixels in: its bevel and padding) holding the
-/// map beside a column of three rows as tall together as the map (inventory, crafting, then
-/// chat and pause side by side, each half the row), the info line under both. What is left
-/// between the hotbar and the frame is the sky's open part. Everything on whole pixels.
+/// map and, at the right, a 3 by 3 grid of buttons (taller than wide) as tall as the map (inventory 2 by 2 at the
+/// top right, pause 2 by 1 under it, chat at the bottom left, the advancements and the camera
+/// above chat), the info line under both. What is left between the hotbar and the frame is
+/// the sky's open part. Everything on whole pixels.
 pub fn dual_panel(width: f32, height: f32) -> DualPanel {
     const PAD: f32 = 6.0;
     const GAP: f32 = 4.0;
@@ -217,15 +218,15 @@ pub fn dual_panel(width: f32, height: f32) -> DualPanel {
     // The least of the sky left open under the hotbar.
     let least_open = 36.0;
     let inner = (width - 2.0 * PAD - 2.0 * INSET).max(0.0);
-    // The buttons' column a quarter of the width, the map as large as the rest allows.
-    let column = (inner * 0.26).floor();
     let room = (height - PAD - 2.0 * INSET - 2.0 * GAP - INFO - band - least_open).max(0.0);
-    let side = (inner - column - GAP).min(room).max(0.0);
-    // Three rows and two gaps exactly as tall as the map.
-    let button = ((side - 2.0 * GAP) / 3.0).floor().max(0.0);
-    let side = 3.0 * button + 2.0 * GAP;
-    // The column takes what the map's rounding leaves, 4 from it.
-    let column = inner - side - GAP;
+    // The map a little over half the width, as tall as the room allows; the grid takes the rest
+    // beside it, as tall as the map: three rows of cells and two gaps down, three columns and
+    // two gaps across.
+    let m = room.min((inner * 0.58).floor());
+    let tall = ((m - 2.0 * GAP) / 3.0).floor().max(0.0);
+    let side = 3.0 * tall + 2.0 * GAP;
+    let wide = ((inner - GAP - side - 2.0 * GAP) / 3.0).floor().max(0.0);
+    let grid = 3.0 * wide + 2.0 * GAP;
     let frame_height = side + 2.0 * INSET + GAP + INFO;
     let frame = [
         PAD,
@@ -234,10 +235,10 @@ pub fn dual_panel(width: f32, height: f32) -> DualPanel {
         frame_height,
     ];
     let (left, top) = (frame[0] + INSET, frame[1] + INSET);
-    let x = left + side + GAP;
-    let row = |i: f32| top + i * (button + GAP);
-    // Chat and pause share the last row: half of it each, the gap between.
-    let half = ((column - GAP) / 2.0).floor();
+    let x = left + inner - grid;
+    let col = |i: f32| x + i * (wide + GAP);
+    let row = |i: f32| top + i * (tall + GAP);
+    let (two_w, two_h) = (2.0 * wide + GAP, 2.0 * tall + GAP);
     DualPanel {
         band,
         sky: [0.0, 0.0, width, height],
@@ -246,10 +247,11 @@ pub fn dual_panel(width: f32, height: f32) -> DualPanel {
         frame,
         map: [left, top, side, side],
         buttons: [
-            [x, row(0.0), column, button],
-            [x, row(1.0), column, button],
-            [x, row(2.0), half, button],
-            [x + column - half, row(2.0), half, button],
+            [col(1.0), row(0.0), two_w, two_h],
+            [col(1.0), row(2.0), two_w, tall],
+            [col(0.0), row(2.0), wide, tall],
+            [col(0.0), row(0.0), wide, tall],
+            [col(0.0), row(1.0), wide, tall],
         ],
     }
 }
@@ -3433,32 +3435,34 @@ mod tests {
         assert_eq!(dual_panel_scale(1080), 5.0);
         let panel = dual_panel(216.0, 248.0);
         // The frame 6 in from the sides and the bottom; inside its 8 (bevel and padding), 188
-        // wide: the map 134 square (188 - 48 - 4 is 136, rounded to three 42-tall rows and
-        // two gaps) and, 4 from it, the 50-wide column of those rows (inventory, crafting,
-        // then chat and pause 23 wide each with the gap between); the info line 4 under both.
-        assert_eq!(panel.frame, [6.0, 78.0, 204.0, 164.0]);
-        assert_eq!(panel.map, [14.0, 86.0, 134.0, 134.0]);
+        // wide: the map 107 square (58% of the width, in three 33-tall rows and two gaps) and
+        // the grid in the 77 left of it, 4 away: three 23-wide columns; the info line 4 under.
+        assert_eq!(panel.frame, [6.0, 105.0, 204.0, 137.0]);
+        assert_eq!(panel.map, [14.0, 113.0, 107.0, 107.0]);
         assert_eq!(
             panel.buttons,
             [
-                [152.0, 86.0, 50.0, 42.0],
-                [152.0, 132.0, 50.0, 42.0],
-                [152.0, 178.0, 23.0, 42.0],
-                [179.0, 178.0, 23.0, 42.0]
+                [152.0, 113.0, 50.0, 70.0],
+                [152.0, 187.0, 50.0, 33.0],
+                [125.0, 187.0, 23.0, 33.0],
+                [125.0, 113.0, 23.0, 33.0],
+                [125.0, 150.0, 23.0, 33.0]
             ]
         );
         assert_eq!(panel.info, [14.0, 224.0, 188.0, 10.0]);
-        // The sky under everything, open from the hotbar to 4 above the frame: the arc's 50.
+        // The sky under everything, open from the hotbar to 4 above the frame.
         assert_eq!(panel.sky, [0.0, 0.0, 216.0, 248.0]);
-        assert_eq!(panel.open, [0.0, 24.0, 216.0, 50.0]);
-        assert_eq!(rect_at(&panel.buttons, [190.0, 200.0]), Some(3));
-        assert_eq!(rect_at(&panel.buttons, [177.0, 200.0]), None);
-        // A short screen: the map shrinks so the sky stays open under the hotbar, the
-        // column's rows still as tall together as it.
+        assert_eq!(panel.open, [0.0, 24.0, 216.0, 77.0]);
+        // A point on the inventory's 2 by 2, on pause, and in the gap between chat and pause.
+        assert_eq!(rect_at(&panel.buttons, [177.0, 148.0]), Some(0));
+        assert_eq!(rect_at(&panel.buttons, [177.0, 205.0]), Some(1));
+        assert_eq!(rect_at(&panel.buttons, [150.0, 205.0]), None);
+        // A short screen: the grid shrinks with the map so the sky stays open under the
+        // hotbar, as tall together as it.
         let short = dual_panel(216.0, 180.0);
         assert!(short.open[3] >= 36.0);
         assert_eq!(
-            short.buttons[3][1] + short.buttons[3][3],
+            short.buttons[1][1] + short.buttons[1][3],
             short.map[1] + short.map[3]
         );
     }

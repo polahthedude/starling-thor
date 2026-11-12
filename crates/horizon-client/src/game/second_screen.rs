@@ -1,7 +1,7 @@
 //! Dual-screen handhelds (AYN Thor...): what the game draws on the second display
 //! (`android/second_screen.rs` brings its surface), laid out after New 3DS Edition's touch screen
 //! (`touch::dual_panel`): the hotbar along the top, the coordinates under it, the map at the left
-//! and three buttons (inventory, crafting, pause) at the right, in vanilla's sprites. The window
+//! and a 3 by 3 grid of buttons (inventory, pause, chat, advancements, camera) at the right, in vanilla's sprites. The window
 //! keeps the world and the bars, which `hud::dual_screen_bars` stacks from its top edge.
 use super::*;
 use crate::second_screen::{Change, NativeWindow, closed, take_change};
@@ -82,6 +82,11 @@ const VANILLA_CREATIVE: bool = true;
 /// The pause menu as vanilla's, moved whole to the lower screen like the other menus. Off:
 /// the dual screen's own pause layout (`screens.rs`), kept in case it is wanted back.
 const VANILLA_PAUSE: bool = true;
+
+/// The world list and the create and edit world screens as vanilla's, moved whole to the lower
+/// screen like the other menus, at the scale that fits it. Off: New 3DS Edition's own layouts
+/// (`worlds.rs`, `forms.rs`), kept in case they are wanted back.
+const VANILLA_WORLDS: bool = true;
 
 /// The lower screen's copy of a container screen is being drawn (`container_frame`).
 pub(super) fn lower_pass() -> bool {
@@ -416,8 +421,17 @@ impl Game<'_> {
             // as large as each fits.
             Screen::Inventory if beacon => [234, 223],
             Screen::Inventory => [280, 170],
+            // The pause menu's 204-wide buttons and its rows, with a little room: as large as
+            // they fit, filling the lower screen as the other menus do.
+            Screen::Paused => [214, 190],
             _ => [320, 240],
         };
+        // The title's own screens (the world list, creating a world) are as wide as vanilla's
+        // 310-pixel rows: the largest scale that fits them, in quarter steps.
+        let title = self.title.is_some() && !matches!(self.screen, Screen::Options | Screen::Mod);
+        if title {
+            return hud::LayoutAs::fitted(window, size.map(|s| (s, [310, 240])), true);
+        }
         hud::LayoutAs::new(window, size.map(|s| (s, min)))
     }
 
@@ -657,6 +671,18 @@ impl Game<'_> {
             if !self.screen_on_second_screen() {
                 return;
             }
+            // A finger lifted leaves no pointer behind: nothing stays hovered where it was.
+            if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+                self.cursor = (-10_000.0, -10_000.0);
+                self.handle_window_event(
+                    events,
+                    id,
+                    winit::event::WindowEvent::CursorMoved {
+                        device_id: winit::event::DeviceId::dummy(),
+                        position: winit::dpi::PhysicalPosition::new(-10_000.0, -10_000.0),
+                    },
+                );
+            }
         }
         drop(taps);
         ui::tooltips_elsewhere(true);
@@ -696,12 +722,18 @@ impl Game<'_> {
         self.audio.play_button_click();
         self.android_touch_haptic(12);
         match button {
-            // The inventory (the 3DS's X button), or crafting (Y): one screen, its tabs.
-            0 | 1 => {
-                menu::open_on(if button == 0 { None } else { Some(0) });
+            // Inventory and crafting: one screen, its tabs.
+            0 => {
+                menu::open_on(None);
                 if self.screen != Screen::Inventory {
                     self.android_dispatch_custom_token(inventory, true);
                     self.android_dispatch_custom_token(inventory, false);
+                }
+            }
+            // Pause, as the touch controls' Escape: the menu, or back out of a screen.
+            1 => {
+                if let Err(error) = self.pad_back() {
+                    log::warn!("Second screen: {error}");
                 }
             }
             // Chat, typed on the window with the keyboard up, as the touch controls' chat.
@@ -711,10 +743,15 @@ impl Game<'_> {
                 }
                 self.android_show_keyboard();
             }
-            // Pause, as the touch controls' Escape: the menu, or back out of a screen.
+            // The advancements.
+            3 => {
+                self.android_dispatch_custom_token("action:key.advancements", true);
+                self.android_dispatch_custom_token("action:key.advancements", false);
+            }
+            // The camera: first person, behind, in front (F5).
             _ => {
-                if let Err(error) = self.pad_back() {
-                    log::warn!("Second screen: {error}");
+                if let Err(error) = self.key_pressed(winit::keyboard::KeyCode::F5) {
+                    log::warn!("Second screen camera: {error}");
                 }
             }
         }
@@ -823,41 +860,29 @@ impl Game<'_> {
             );
             let (cx, cy) = ((x + bw / 2.0).floor(), (y + bh / 2.0).floor());
             match i {
-                // The block's face at the left, inside the button's 3-pixel border, 1:1; the
-                // short label centred in the rest, short of the right border.
-                0 | 1 => {
-                    const EDGE: f32 = 3.0;
-                    let face = [x + EDGE, cy - 8.0];
-                    if i == 0 {
-                        draw_chest_face(batch, &self.gui.atlas, face);
-                    } else if let Some(r) = self
-                        .gui
-                        .atlas
-                        .sprites
-                        .get("block/crafting_table_top")
-                        .copied()
-                    {
-                        batch.rect_uv(face[0], face[1], 16.0, 16.0, r, u32::MAX);
-                    }
-                    let label = if i == 0 { "Bag" } else { "Craft" };
-                    let (from, to) = (face[0] + 16.0 + 2.0, x + bw - EDGE);
+                // The inventory and crafting in one screen: the chest large over its label.
+                0 => {
                     let start = batch.vertices.len();
-                    let at = [from, cy - 4.0, to - from];
-                    menu::centered(batch, &self.gui.atlas, label, at, u32::MAX, true);
-                    // A label a pixel wider than its room may use the pixel either side, never
-                    // the face or the border's outer 2.
-                    batch.clip_since(start, face[0] + 17.0, y, x + bw - 2.0, y + bh);
-                }
-                2 => {
-                    let stack = ItemStack::new("minecraft:writable_book", 1);
-                    self.draw_item(batch, &stack, cx - 8.0, cy - 8.0);
+                    draw_chest_face(batch, &self.gui.atlas, [cx - 8.0, cy - 14.0]);
+                    hud::transform_since(batch, start, [cx, cy - 6.0], 2.0, [0.0, 0.0]);
+                    let at = [x, y + bh - 14.0, bw];
+                    menu::centered(batch, &self.gui.atlas, "Inventory", at, u32::MAX, true);
                 }
                 // Pause: two bars.
-                _ => {
+                1 => {
                     let atlas = &self.gui.atlas;
                     for dx in [-4.0, 1.0] {
                         batch.fill(atlas, cx + dx, cy - 5.0, 3.0, 10.0, u32::MAX);
                     }
+                }
+                // Chat, the advancements, the camera: an item each.
+                _ => {
+                    let item = match i {
+                        2 => "minecraft:writable_book",
+                        3 => "minecraft:knowledge_book",
+                        _ => "minecraft:ender_eye",
+                    };
+                    self.draw_item(batch, &ItemStack::new(item, 1), cx - 8.0, cy - 8.0);
                 }
             }
         }

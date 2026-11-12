@@ -39,6 +39,10 @@ struct State {
     book_press: Option<([f32; 2], bool)>,
     /// The control a recipe was last placed from: A on it again takes the craft.
     book_placed: Option<usize>,
+    /// The recipe the finger last picked in the window's book, and the slot focus then; where
+    /// the cursor was as the book opened.
+    picked: Option<(ItemStack, Option<usize>)>,
+    open_cursor: Option<(f32, f32)>,
     /// The creative screen's slot the controller pressed, in window pixels, for the next frame.
     creative_press: Option<[f32; 2]>,
     /// A finger on the creative grid: where it came down (lower screen's pixels), the height
@@ -326,12 +330,7 @@ impl Game<'_> {
                 Touch::Up([x, y]) => {
                     let p = [x / layout.scale, y / layout.scale];
                     if let Some((start, _, moved)) = CONTAINER.with_borrow_mut(|s| s.swipe.take()) {
-                        if moved {
-                        } else {
-                                    (0.0, None)
-                                };
-                            });
-                        } else {
+                        if !moved {
                             let at = to_window(start);
                             self.android_touch_haptic(6);
                             self.window_mouse(events, id, at, Some(ElementState::Pressed));
@@ -370,6 +369,11 @@ impl Game<'_> {
                 self.android_touch_haptic(4);
             }
         }
+        // A tap may have opened or closed the recipe book, which moves the screen on the
+        // window (`recipe_book_shift`): place this frame's copy where it is now, not where it
+        // was before the tap (it showed shifted and cut for a frame).
+        let layout = self.container_view(size).unwrap_or(layout);
+        let [rx, ry, rw, rh] = layout.region;
         let right = |game: &mut Self, slot: usize| game.container_click(slot, 1, Input::Pickup);
         self.slot_hold(click, right);
         // Vanilla's screen, at the window's size with the pointer away (no hover, no tooltip,
@@ -721,8 +725,24 @@ impl Game<'_> {
             }
         }
         // The recipe under the finger in the book is shown too, over the slot's.
-        let stack = book
-            .and_then(|_| self.recipe_ui.hovered.clone())
+        // It stays once picked, until a slot is chosen or the book closes; a cursor left where
+        // the book opened (the tap on its button) picks nothing.
+        let cursor = self.cursor;
+        let hovered = self.recipe_ui.hovered.clone();
+        CONTAINER.with_borrow_mut(|s| {
+            if book.is_none() {
+                (s.picked, s.open_cursor) = (None, Some(cursor));
+            } else if let Some(h) = hovered
+                && s.open_cursor != Some(cursor)
+            {
+                s.picked = Some((h, s.focus));
+            }
+            if s.picked.as_ref().is_some_and(|(_, focus)| *focus != s.focus) {
+                s.picked = None;
+            }
+        });
+        let stack = CONTAINER
+            .with_borrow(|s| s.picked.as_ref().map(|(h, _)| h.clone()))
             .or(stack);
         let left = book_slide(book.map(|[x, _, bw, _]| x + bw + 4.0));
         let span = [left, w - left];

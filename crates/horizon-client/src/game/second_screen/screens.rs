@@ -77,9 +77,11 @@ impl Game<'_> {
             return;
         }
         let (w, h) = (batch.width, batch.height);
-        let hint = self.pad_hint(if self.worlds_on_second_screen() {
+        use horizon_client::title::Mode;
+        let mode = self.title.as_ref().map(|t| &t.mode);
+        let hint = self.pad_hint(if matches!(mode, Some(Mode::Select { .. })) {
             "{south} Play    {north} Edit    {west} Delete    {east} Back"
-        } else if self.form_on_second_screen() {
+        } else if matches!(mode, Some(Mode::Create { .. } | Mode::Edit { .. })) {
             "{south} Select    {west} Create / Save    {east} Back"
         } else {
             "{south} Select    {east} Back"
@@ -640,7 +642,7 @@ impl Game<'_> {
     }
 
     /// The window over a screen moved to the lower screen without a layout of its own: its
-    /// name on the dark bar and the controls, as New 3DS Edition's.
+    /// name and the controls along the bottom, over the darkened world, as the inventory's.
     pub(super) fn draw_screen_header(&mut self, batch: &mut HudBatch) {
         let (key, plain) = match self.screen {
             Screen::Options => ("options.title", "Options"),
@@ -660,13 +662,11 @@ impl Game<'_> {
             Screen::Options => "{south} Select    {left}/{right} Change    {east} Back",
             _ => "{south} Select    {east} Back",
         });
-        let (w, h) = (batch.width, batch.height);
-        let y = (h * 0.4).floor();
-        let atlas = &self.gui.atlas;
-        batch.fill(atlas, 0.0, y, w, 16.0, 0xDC30_3030);
-        centered(batch, atlas, &title, [0.0, y + 4.0, w], u32::MAX, true);
-        centered(batch, atlas, &hint, [0.0, y + 22.0, w], 0xFFCC_CCCC, true);
-        self.draw_lower_tooltip(batch, h - 6.0);
+        // The caption as the inventory's: the name along the bottom, the controls under it,
+        // a tooltip of the screen above them.
+        self.draw_upper_caption(batch, None, Some(&title), &hint);
+        let h = batch.height;
+        self.draw_lower_tooltip(batch, h - 46.0);
     }
 
     /// The window under the pause menu: a large pause sign and the menu's name, over the world.

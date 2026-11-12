@@ -2572,7 +2572,7 @@ impl Game<'_> {
         Self::tooltip_text(batch, atlas, &lines, x, y);
     }
     /// A tooltip's lines with their legacy codes resolved and their colours.
-    fn resolved<T: Clone + Into<horizon_client::text::Text>>(
+    pub(super) fn resolved<T: Clone + Into<horizon_client::text::Text>>(
         lines: &[(T, u32)],
     ) -> Vec<(horizon_client::text::Text, u32)> {
         lines

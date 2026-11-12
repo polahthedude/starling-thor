@@ -37,7 +37,8 @@ thread_local! {
 
 impl Game<'_> {
     pub(super) fn worlds_on_second_screen(&self) -> bool {
-        !matches!(self.screen, Screen::Options | Screen::Mod)
+        !super::VANILLA_WORLDS
+            && !matches!(self.screen, Screen::Options | Screen::Mod)
             && self
                 .title
                 .as_ref()

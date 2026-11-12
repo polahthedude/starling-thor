@@ -1251,10 +1251,13 @@ fn dual_screen_bars_grown(
         }
         let mirrored = axis - low - top;
         // Where it goes, and the point it grows from: the top centre or a top corner.
+        // Beside the hearts and food (`lift`), the bar's middle is theirs: they are 9 tall
+        // from the edge, it is 5, so it goes 2 down (and its level number with it).
+        let level = if lift > 0.0 { 2.0 } else { 0.0 };
         let (dx, dy, pivot) = if bar {
-            (0.0, mirrored, [mid, margin])
+            (0.0, mirrored + level, [mid, margin])
         } else if number {
-            (0.0, number_dy, [mid, margin])
+            (0.0, number_dy + level, [mid, margin])
         } else if cx < mid {
             (left, mirrored - lift, [margin, margin])
         } else {
@@ -1350,8 +1353,24 @@ pub struct LayoutAs(Option<([u32; 2], (f32, f32, f32))>);
 
 impl LayoutAs {
     pub fn new(window: [u32; 2], size: Option<([u32; 2], [u32; 2])>) -> Self {
+        Self::fitted(window, size, false)
+    }
+    /// [`Self::new`], with `fit` the scale a quarter step at a time: as large as keeps `min`
+    /// GUI pixels, not a whole number (the GUI Scale option still caps it).
+    pub fn fitted(
+        window: [u32; 2],
+        size: Option<([u32; 2], [u32; 2])>,
+        fit: bool,
+    ) -> Self {
         let layout = size.map(|(size, min)| {
-            let scale = HudBatch::scale_for(size, min);
+            let scale = if fit {
+                let limit = GUI_SCALE.load(std::sync::atomic::Ordering::Relaxed);
+                let room = (size[0] as f32 / min[0] as f32).min(size[1] as f32 / min[1] as f32);
+                let room = if limit == 0 { room } else { room.min(limit as f32) };
+                ((room * 4.0).floor() / 4.0).max(1.0)
+            } else {
+                HudBatch::scale_for(size, min)
+            };
             (
                 window,
                 (
@@ -2714,15 +2733,16 @@ mod tests {
             let ((l, r), (t, b)) = (x_span(q).unwrap(), y_span(q).unwrap());
             [l, t, r, b]
         };
-        // Rows mirrored about y 217 (240 - 24 + 1). The bar keeps its 182 at the top centre.
-        assert_eq!(at(1), [122.0, 1.0, 304.0, 6.0]);
+        // Rows mirrored about y 217 (240 - 24 + 1). The bar keeps its 182 at the top centre,
+        // 2 down so its middle is the hearts' (they are 9 tall from the edge, it 5).
+        assert_eq!(at(1), [122.0, 3.0, 304.0, 8.0]);
         // The hearts in the top left corner (122 - 1 to the left), the food in the top right
         // (426 - 304 to the right), up against the top edge beside the bar.
         assert_eq!(at(2), [1.0, 1.0, 10.0, 10.0]);
         assert_eq!(at(3), [1.0, 11.0, 10.0, 20.0]);
         assert_eq!(at(4), [417.0, 1.0, 426.0, 10.0]);
         // The level number stays in the middle, clear of the bar (which ends at 6).
-        assert_eq!(at(5), [210.0, 8.0, 216.0, 16.0]);
+        assert_eq!(at(5), [210.0, 10.0, 216.0, 18.0]);
         // The armor and the air at the bottom corners, ending 1 above the bottom.
         assert_eq!(at(6), [1.0, 230.0, 10.0, 239.0]);
         assert_eq!(at(7), [417.0, 230.0, 426.0, 239.0]);
