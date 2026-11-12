@@ -10,6 +10,8 @@ pub struct SecondScreen {
     config: wgpu::SurfaceConfiguration,
     /// For the HUD's 3D items, at the screen's size.
     depth: wgpu::TextureView,
+    /// The title panorama under the next frame, looking this way (yaw and pitch, degrees).
+    pub panorama: Option<[f32; 2]>,
 }
 
 impl Renderer {
@@ -67,6 +69,7 @@ impl Renderer {
             config,
             surface,
             device: self.device.clone(),
+            panorama: None,
         };
         screen.resize(size);
         Ok(screen)
@@ -103,7 +106,14 @@ impl Renderer {
             format: Some(self.config.format.remove_srgb_suffix()),
             ..Default::default()
         });
-        drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        // The title panorama first, as the window's title screen draws it. The window's frame
+        // was submitted: its projection can take this screen's until the next one.
+        let panorama = screen.panorama.take();
+        if let Some([yaw, pitch]) = panorama {
+            self.panorama
+                .prepare(&self.queue, size[0], size[1], yaw, pitch);
+        }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Second screen clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &target,
@@ -114,8 +124,20 @@ impl Renderer {
                     store: wgpu::StoreOp::Store,
                 },
             })],
+            depth_stencil_attachment: panorama.map(|_| wgpu::RenderPassDepthStencilAttachment {
+                view: &screen.depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
             ..Default::default()
-        }));
+        });
+        if panorama.is_some() {
+            self.panorama.draw(&mut pass);
+        }
+        drop(pass);
         self.hud
             .draw(&mut encoder, &target, &screen.depth, batch, size);
         self.uploads.finish(&encoder);

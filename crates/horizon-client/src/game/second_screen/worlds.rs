@@ -188,7 +188,7 @@ impl Game<'_> {
                 }
             };
             if chosen {
-                outline(&mut batch, &self.gui.atlas, row, 0xFF3F_E0FF);
+                outline(&mut batch, &self.gui.atlas, row, u32::MAX);
             }
         }
         let [lx, ly, lw, lh] = layout.list;
@@ -208,7 +208,7 @@ impl Game<'_> {
             ty
         };
         panel(&mut batch, atlas, [tx, at, tw, thumb]);
-        self.present_lower(&batch, WORLDS_BACKGROUND);
+        self.present_lower(&mut batch, WORLDS_BACKGROUND);
     }
 
     /// A vanilla button `rect`, `label` centered (greyed when inactive).

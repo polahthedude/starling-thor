@@ -339,7 +339,7 @@ impl Game<'_> {
             batch.text(atlas, value, x + 4.0, y + 3.0, color, false);
             if i == pick {
                 let inner = [x + 1.0, y + 1.0, rect[2] - 2.0, ITEM - 2.0];
-                outline(batch, atlas, inner, 0xFF3F_E0FF);
+                outline(batch, atlas, inner, u32::MAX);
             }
         }
     }
@@ -442,7 +442,7 @@ impl Game<'_> {
         };
         panel(&mut batch, atlas, [tx, at, tw, thumb]);
         self.draw_form_dropdown(&mut batch, &rows, &tops);
-        self.present_lower(&batch, FORM_BACKGROUND);
+        self.present_lower(&mut batch, FORM_BACKGROUND);
     }
 
     /// The header: the screen's name, and the green button under it (grey when it can't be
@@ -526,7 +526,7 @@ impl Game<'_> {
             }
         }
         if chosen {
-            outline(batch, atlas, control, 0xFF3F_E0FF);
+            outline(batch, atlas, control, u32::MAX);
         }
     }
 

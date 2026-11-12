@@ -262,6 +262,49 @@ pub fn draw_scissored(
     );
 }
 
+/// [`draw`] under `pose` (GUI space; the model's unit block 1 wide, y up) in place of a slot's:
+/// lit, culled and sorted the same, not clipped to a slot, not cached (a pose that moves every
+/// frame would only fill the cache).
+#[allow(clippy::too_many_arguments)]
+pub fn draw_posed(
+    state: &ItemRenderState,
+    renderer: &ItemRenderer,
+    sprites: &HashMap<String, Rect>,
+    host: &dyn SpecialHost,
+    batch: &mut HudBatch,
+    pose: Mat4,
+    time: f32,
+    glint_speed: f32,
+    glint_alpha: f32,
+) {
+    if state.is_empty() {
+        return;
+    }
+    let mut quads: Vec<ItemQuad> = Vec::new();
+    state.submit(renderer, sprites, host, pose, &mut quads);
+    let lights = if state.uses_block_light() {
+        items_3d_lights()
+    } else {
+        items_flat_lights()
+    };
+    let unclipped = [
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+        f32::INFINITY,
+        f32::INFINITY,
+    ];
+    let glint = sprites
+        .contains_key("misc/enchanted_glint_item")
+        .then_some(Glint {
+            speed: glint_speed,
+            alpha: glint_alpha,
+            millis: time * 1000.0,
+            scale: 8.0,
+        });
+    batch.glint_alpha = glint_alpha;
+    draw_quads(&quads, lights, batch, unclipped, glint.as_ref());
+}
+
 /// Entries of `ItemRenderer::gui_drawn` before it starts over.
 const DRAWN_LIMIT: usize = 8192;
 

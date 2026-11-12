@@ -98,6 +98,11 @@ pub(crate) fn touch_visible() -> bool {
     horizon_client::android_runtime::active_input() == catalog::InputHost::Touch
 }
 pub(crate) fn touch_input(touch: bool) {
+    // The window touched while the open screen is on a dual screen's other display: the input
+    // stays the controller's (or keyboard's) it was.
+    if touch && horizon_client::touch::menu_elsewhere() {
+        return;
+    }
     horizon_client::android_runtime::note_input(if touch {
         catalog::InputHost::Touch
     } else {

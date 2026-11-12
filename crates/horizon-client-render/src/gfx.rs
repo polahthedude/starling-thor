@@ -7970,7 +7970,10 @@ impl Renderer {
                 );
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if crumbling_quads > 0 && !oit_on {
+            // Cracks multiply into the opaque world (RenderPipelines.CRUMBLING) with improved
+            // transparency too: accumulated as translucent fragments, they would paint their
+            // light texture over the block instead of darkening it.
+            if crumbling_quads > 0 {
                 pass.set_pipeline(&self.crumbling_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
@@ -8142,18 +8145,6 @@ impl Renderer {
                         quads(pass, &f.text[s], text_quads, entity_quads);
                         quads(
                             pass,
-                            &f.crumbling[s],
-                            crumbling_quads,
-                            entity_quads + text_quads,
-                        );
-                        quads(
-                            pass,
-                            &f.crumbling[s],
-                            translucent_crumbling_quads,
-                            entity_quads + text_quads + crumbling_quads,
-                        );
-                        quads(
-                            pass,
                             &f.swirl[s],
                             swirl_quads,
                             entity_quads
@@ -8319,7 +8310,7 @@ impl Renderer {
             if outline_edges > 0 && frame.outline_after_terrain {
                 self.draw_outline(&mut pass, outline_edges as u32, frame.outline_high_contrast);
             }
-            if translucent_crumbling_quads > 0 && !oit_on {
+            if translucent_crumbling_quads > 0 {
                 pass.set_pipeline(&self.crumbling_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));

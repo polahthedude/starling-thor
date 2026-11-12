@@ -8,18 +8,15 @@
 //!
 //! The grid scrolls by the pixel, easing to where a swipe, the scrollbar, its arrows or the
 //! controller send it; an item is taken when the finger lifts without having swiped.
-use super::menu::{arrow, centered, highlight, inside, panel, slot_frame};
+use super::menu::{ON_FRAME, centered, content_top, highlight, inside, panel, slot_frame};
 use super::*;
 use crate::second_screen::Touch;
-use horizon_client::{
-    item_tooltip,
-    touch::dual_menu::{self, SLOT},
-};
+use horizon_client::{item_tooltip, touch::dual_menu};
+
+/// The grid's cells: the hotbar's slots' pitch, each column under a hotbar slot.
+const SLOT: f32 = dual_menu::CELL;
 use std::collections::HashMap;
 use std::time::Instant;
-
-/// The 3DS's yellow: the scrollbar's arrows.
-const YELLOW: u32 = 0xFF3F_E0FF;
 
 #[derive(Clone, Copy)]
 enum Finger {
@@ -27,6 +24,8 @@ enum Finger {
     Grid { y: f32, from: f32, swiped: bool },
     /// Holding the scrollbar.
     Track,
+    /// On the tab bar: where it came down, the tabs' scroll then, and whether it has swiped.
+    Tabs { x: f32, from: f32, swiped: bool },
 }
 
 #[derive(Default)]
@@ -43,16 +42,13 @@ struct State {
     finger: Option<Finger>,
     /// The last frame, for the easing.
     last: Option<Instant>,
+    /// How far the tab bar is scrolled, and the tab it was last kept in sight for.
+    tab_scroll: f32,
+    tab_shown: Option<usize>,
 }
 
 thread_local! {
     static CREATIVE: RefCell<State> = RefCell::new(State::default());
-}
-
-/// The scrollbar thumb's height on a `track` tall track, a `page` of the list shown and `max`
-/// more below.
-fn thumb_size(track: f32, page: f32, max: f32) -> f32 {
-    (track * page / (page + max)).clamp(8.0, track)
 }
 
 impl Game<'_> {
@@ -174,9 +170,9 @@ impl Game<'_> {
         {
             self.creative_screen.select(first);
         }
-        // Small enough for the tabs to be square around their icons.
+        // The panel's scale, the inventory's tab fitting: the tabs scroll.
         let band = touch::dual_panel(0.0, 0.0).band;
-        let scale = dual_menu::inventory_scale(size, tabs.len(), band);
+        let scale = dual_menu::inventory_scale(size, 0, band);
         let mut batch = lower_batch_at(size, scale);
         let (w, h, scale) = (batch.width, batch.height, batch.scale);
         let band = touch::dual_panel(w, h).band;
@@ -197,9 +193,10 @@ impl Game<'_> {
         }
         self.creative_ease();
         self.slot_hold(Self::legacy_click, Self::legacy_right_click);
-        self.draw_lower_hotbar(&mut batch, band);
         let selected = self.creative_screen.selected;
         let chosen = tabs.iter().position(|&i| i == selected);
+        let tab_scroll = Self::creative_tabs_follow(dims, tabs.len(), chosen);
+        self.draw_menu_ground(&mut batch, band, tabs.len());
         match chosen {
             Some(_) => self.draw_creative_grid(&mut batch, band, tabs.len()),
             None => self.draw_legacy_inventory(&mut batch, band),
@@ -209,12 +206,34 @@ impl Game<'_> {
             .map(|&i| self.creative_screen.tabs[i].icon.clone())
             .collect();
         let icons: Vec<&str> = icons.iter().map(String::as_str).collect();
-        self.draw_lower_tabs(&mut batch, &icons, chosen);
+        self.draw_lower_tabs(&mut batch, &icons, chosen, tab_scroll);
         if let Some(stack) = self.carried.clone() {
             let [x, y] = CREATIVE.with_borrow(|s| s.at);
             self.draw_item(&mut batch, &stack, x - 8.0, y - 8.0);
         }
-        self.present_lower(&batch, BACKGROUND);
+        self.present_lower(&mut batch, BACKGROUND);
+    }
+
+    /// The tab bar's scroll, kept in range, and moved to bring `chosen` into sight when it
+    /// changed (a controller's trigger, a tap on the window).
+    fn creative_tabs_follow([w, h, _]: [f32; 3], tabs: usize, chosen: Option<usize>) -> f32 {
+        let max = dual_menu::tabs_scroll_max(w, h, tabs);
+        CREATIVE.with_borrow_mut(|s| {
+            if chosen != s.tab_shown {
+                s.tab_shown = chosen;
+                if let Some(i) = chosen {
+                    let (cats, _, view) = dual_menu::tabs_scrolled(w, h, tabs, s.tab_scroll);
+                    let [x, _, size, _] = cats[i];
+                    if x < view[0] {
+                        s.tab_scroll -= view[0] - x;
+                    } else if x + size > view[0] + view[2] {
+                        s.tab_scroll += x + size - view[0] - view[2];
+                    }
+                }
+            }
+            s.tab_scroll = s.tab_scroll.clamp(0.0, max);
+            s.tab_scroll
+        })
     }
 
     /// The scroll eased toward where it is going, about 0.15 s to arrive.
@@ -241,8 +260,10 @@ impl Game<'_> {
         [w, h, band]: [f32; 3],
         tabs: usize,
     ) -> (dual_menu::Grid, std::sync::Arc<[ItemStack]>, f32, f32) {
-        let (_, inventory) = dual_menu::tabs(w, h, tabs);
-        let grid = dual_menu::grid(w, band, inventory[1] - 2.0);
+        // Inside the frame: from its top to its bottom (the tab bar's strip, 2, and FRAME).
+        let (_, _, view) = dual_menu::tabs_scrolled(w, h, tabs, 0.0);
+        let bottom = view[1] - 4.0 - dual_menu::FRAME;
+        let grid = dual_menu::grid(w, content_top(band), bottom);
         let items = self.creative_screen.items(&self.pack.names);
         let rows = items.len().div_ceil(9);
         let max = rows.saturating_sub(grid.rows) as f32 * SLOT;
@@ -263,7 +284,7 @@ impl Game<'_> {
     /// The scrollbar held at `y`: the thumb's middle there.
     fn creative_track(&mut self, grid: &dual_menu::Grid, max: f32, y: f32) {
         let [_, ty, _, th] = grid.track;
-        let thumb = thumb_size(th, grid.rows as f32 * SLOT, max);
+        let thumb = dual_menu::SCROLLER[1];
         let v = ((y - ty - thumb / 2.0) / (th - thumb).max(1.0)).clamp(0.0, 1.0);
         self.creative_scroll_to(v * max, true);
     }
@@ -277,15 +298,25 @@ impl Game<'_> {
         p: [f32; 2],
     ) {
         CREATIVE.with_borrow_mut(|s| (s.at, s.finger) = (p, None));
-        let (categories, inventory_tab) = dual_menu::tabs(w, h, tabs.len());
+        let scroll = CREATIVE.with_borrow(|s| s.tab_scroll);
+        let (_, inventory_tab, view) = dual_menu::tabs_scrolled(w, h, tabs.len(), scroll);
         if inside(inventory_tab, p) {
-            if let Some(i) = inventory {
+            if let Some(i) = inventory
+                && self.creative_screen.selected != i
+            {
                 self.creative_screen.select(i);
+                self.android_touch_haptic(8);
             }
             return;
         }
-        if let Some(i) = touch::rect_at(&categories, p) {
-            self.creative_screen.select(tabs[i]);
+        // The tabs: chosen when the finger lifts without swiping them along.
+        if inside(view, p) {
+            let finger = Finger::Tabs {
+                x: p[0],
+                from: scroll,
+                swiped: false,
+            };
+            CREATIVE.with_borrow_mut(|s| s.finger = Some(finger));
             return;
         }
         // The inventory's tab: its slots and the hotbar's clicked, and dragged from.
@@ -296,7 +327,10 @@ impl Game<'_> {
         }
         // On an item tab a hotbar slot is chosen for the next item.
         if let Some(slot) = lower_hotbar_slot(w, band, p) {
-            self.selected = slot;
+            if self.selected != slot {
+                self.selected = slot;
+                self.android_touch_haptic(8);
+            }
             return;
         }
         let (grid, _, max, at) = self.creative_layout([w, h, band], tabs.len());
@@ -304,8 +338,10 @@ impl Game<'_> {
         let (_, target) = self.creative_scroll();
         if inside(grid.up, p) {
             self.creative_scroll_to((target - page).max(0.0), false);
+            self.android_touch_haptic(8);
         } else if inside(grid.down, p) {
             self.creative_scroll_to((target + page).min(max), false);
+            self.android_touch_haptic(8);
         } else if inside(grid.track, p) {
             CREATIVE.with_borrow_mut(|s| s.finger = Some(Finger::Track));
             self.creative_track(&grid, max, p[1]);
@@ -326,8 +362,21 @@ impl Game<'_> {
         let Some(finger) = CREATIVE.with_borrow(|s| s.finger) else {
             return;
         };
+        if let Finger::Tabs { x, from, swiped } = finger {
+            let dx = p[0] - x;
+            let swiped = swiped || dx.abs() > 4.0;
+            let max = dual_menu::tabs_scroll_max(dims[0], dims[1], tabs);
+            CREATIVE.with_borrow_mut(|s| {
+                s.finger = Some(Finger::Tabs { x, from, swiped });
+                if swiped {
+                    s.tab_scroll = (from - dx).clamp(0.0, max);
+                }
+            });
+            return;
+        }
         let (grid, _, max, _) = self.creative_layout(dims, tabs);
         match finger {
+            Finger::Tabs { .. } => {}
             Finger::Track => self.creative_track(&grid, max, p[1]),
             Finger::Grid { y, from, swiped } => {
                 let dy = p[1] - y;
@@ -347,6 +396,21 @@ impl Game<'_> {
             s.finger.take()
         });
         let on_items = self.creative_item_tabs();
+        // A tab tapped (not swiped along) is chosen.
+        if let Some(Finger::Tabs { swiped, .. }) = finger {
+            let scroll = CREATIVE.with_borrow(|s| s.tab_scroll);
+            let (cats, _, view) = dual_menu::tabs_scrolled(dims[0], dims[1], tabs, scroll);
+            if !swiped
+                && inside(view, p)
+                && let Some(i) = touch::rect_at(&cats, p)
+                && let Some(&tab) = on_items.get(i)
+                && self.creative_screen.selected != tab
+            {
+                self.creative_screen.select(tab);
+                self.android_touch_haptic(8);
+            }
+            return;
+        }
         if !on_items.contains(&self.creative_screen.selected) {
             let slot = Self::legacy_slot_at(dims[0], dims[2], p);
             self.slot_up(slot, Self::legacy_click);
@@ -362,8 +426,11 @@ impl Game<'_> {
         let [ox, oy] = grid.origin;
         let (c, r) = ((p[0] - ox) / SLOT, (p[1] - oy + at) / SLOT);
         let index = r as usize * 9 + c as usize;
-        if let Some(stack) = items.get(index).filter(|s| s.count > 0) {
+        if c < 9.0
+            && let Some(stack) = items.get(index).filter(|s| s.count > 0)
+        {
             self.creative_take(stack.clone(), index);
+            self.android_touch_haptic(10);
         }
     }
 
@@ -399,7 +466,7 @@ impl Game<'_> {
         let title = self.translate(&title, &title);
         let atlas = &self.gui.atlas;
         let [tx, ty, tw, _] = grid.title;
-        centered(batch, atlas, &title, [tx, ty, tw], super::menu::TEXT, false);
+        centered(batch, atlas, &title, [tx, ty, tw], ON_FRAME, false);
         // The rows in sight, the first and last partly, cut to the grid.
         let [ox, oy] = grid.origin;
         let first = (at / SLOT) as usize;
@@ -416,7 +483,8 @@ impl Game<'_> {
                 let (x, y) = (ox + c as f32 * SLOT, oy + r as f32 * SLOT - shift);
                 slot_frame(batch, &self.gui.atlas, [x, y, SLOT, SLOT]);
                 if let Some(stack) = items.get(index).filter(|s| s.count > 0) {
-                    self.draw_item(batch, stack, x + 1.0, y + 1.0);
+                    let inset = ((SLOT - 16.0) / 2.0).floor();
+                    self.draw_item(batch, stack, x + inset, y + inset);
                 }
                 if marked == Some(index) {
                     mark = Some([x, y, SLOT, SLOT]);
@@ -429,66 +497,46 @@ impl Game<'_> {
         }
         let (right, bottom) = (ox + 9.0 * SLOT + 1.0, oy + page + 1.0);
         batch.clip_since(start, ox - 1.0, oy - 1.0, right, bottom);
-        // The scrollbar: arrows at its ends, its thumb along the track.
+        // The scrollbar as vanilla's: its scroller (12 by 15, never stretched) along a sunk
+        // track, greyed when the tab doesn't scroll.
         let atlas = &self.gui.atlas;
-        for (r, dir) in [(grid.up, b'^'), (grid.down, b'v')] {
-            panel(batch, atlas, r);
-            let [x, y, w, h] = r;
-            let color = if max > 0.0 { YELLOW } else { 0xFF8B_8B8B };
-            arrow(
-                batch,
-                atlas,
-                [x + 3.0, y + 4.0, w - 6.0, h - 8.0],
-                dir,
-                color,
-            );
-        }
         let [x, y, bw, bh] = grid.track;
-        batch.fill(atlas, x, y, bw, bh, 0xFF37_3737);
-        if max > 0.0 {
-            let thumb = thumb_size(bh, page, max);
-            let top = y + (bh - thumb) * at / max;
-            panel(batch, atlas, [x, top, bw, thumb]);
+        slot_frame(batch, atlas, [x, y, bw, bh]);
+        let [sw, sh] = dual_menu::SCROLLER;
+        let top = if max > 0.0 {
+            y + ((bh - sh) * at / max).round()
+        } else {
+            y
+        };
+        let sprite = if max > 0.0 {
+            "gui/sprites/container/creative_inventory/scroller"
+        } else {
+            "gui/sprites/container/creative_inventory/scroller_disabled"
+        };
+        match atlas.sprites.get(sprite).copied() {
+            Some(r) => batch.rect_uv(x, top, sw, sh, r, u32::MAX),
+            None => panel(batch, atlas, [x, top, sw, sh]),
         }
     }
 
-    /// The window while the creative screen is open: the chosen item large, "Item Selection",
-    /// its name on a dark bar, as New 3DS Edition's.
+    /// The window while the creative screen is open: the chosen item large (spun by a finger
+    /// on the window), and along the bottom "Item Selection", its name and the controls.
     pub(super) fn draw_creative_upper(&mut self, batch: &mut HudBatch) {
         let stack = CREATIVE
             .with_borrow(|s| s.chosen.clone())
             .or_else(|| self.carried.clone())
             .or_else(|| self.inventory.get(self.selected).cloned().flatten());
         let (w, h) = (batch.width, batch.height);
-        let (cx, cy) = ((w / 2.0).floor(), (h * 0.36).floor());
+        let center = [(w / 2.0).floor(), (h * 0.40).floor()];
         if let Some(stack) = &stack {
-            let one = ItemStack {
-                count: 1,
-                ..stack.clone()
-            };
-            let start = batch.vertices.len();
-            self.draw_item(batch, &one, cx - 8.0, cy - 8.0);
-            hud::transform_since(batch, start, [cx, cy], 4.0, [0.0, 0.0]);
+            self.draw_showcase(batch, stack, center);
         }
-        let atlas = &self.gui.atlas;
-        centered(
-            batch,
-            atlas,
-            "Item Selection",
-            [0.0, cy + 40.0, w],
-            u32::MAX,
-            true,
-        );
-        batch.fill(atlas, 0.0, cy + 52.0, w, 14.0, 0xDC30_3030);
-        if let Some(stack) = &stack {
-            let name = item_tooltip::name_line(stack, &|key| self.pack.names.display_get(key));
-            let atlas = &self.gui.atlas;
-            centered(batch, atlas, &name, [0.0, cy + 55.0, w], u32::MAX, true);
-        }
+        let name = stack
+            .as_ref()
+            .map(|s| item_tooltip::name_line(s, &|key| self.pack.names.display_get(key)));
         let hint = self.pad_hint(
             "{south} or tap: Take    {lb}/{rb}: Hotbar    {lt}/{rt}: Tab    {north}: Clear Hotbar",
         );
-        let atlas = &self.gui.atlas;
-        centered(batch, atlas, &hint, [0.0, cy + 70.0, w], 0xFFCC_CCCC, true);
+        self.draw_upper_caption(batch, Some("Item Selection"), name.as_deref(), &hint);
     }
 }

@@ -660,6 +660,11 @@ impl Game<'_> {
         events: &dyn super::event_loop::EventLoopCtl,
         id: WindowId,
     ) -> Result<bool> {
+        // Dual screen: with the open screen on the second screen, the window's touches spin
+        // the item shown there and go no further.
+        if t.id != super::second_screen::LOWER_FINGER && self.upper_touch(t, events, id) {
+            return Ok(true);
+        }
         self.pad.touch_ui.goy_mode = self.pad.touch.settings.control_style
             == horizon_client::touch::ControlStyle::GoyControl;
         if t.phase == TouchPhase::Ended

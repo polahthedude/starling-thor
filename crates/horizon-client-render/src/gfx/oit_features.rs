@@ -14,8 +14,6 @@ pub struct Features {
     pub entity: Set,
     /// `OIT_TEXT_POLYGON_OFFSET`.
     pub text: Set,
-    /// `OIT_CRUMBLING`.
-    pub crumbling: Set,
     /// `OIT_ENTITY_SHADOW`.
     pub shadow: Set,
     /// `OIT_ENERGY_SWIRL`.
@@ -177,12 +175,6 @@ impl Features {
                 entities,
                 &entity_buffers,
                 kind("text", "entity", Some(wgpu::Face::Back), offset),
-            ),
-            crumbling: set(
-                &entity_module,
-                entities,
-                &entity_buffers,
-                kind("breaking cracks", "entity", Some(wgpu::Face::Back), offset),
             ),
             shadow: set(
                 &entity_module,

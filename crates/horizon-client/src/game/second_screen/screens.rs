@@ -140,8 +140,15 @@ impl Game<'_> {
             d.yaw = d.yaw.rem_euclid(360.0);
             d.yaw
         });
+        // The title panorama here too, the other way from the window's (another view of the
+        // same world, turning with it), a little dimmed under the buttons.
+        let view = {
+            let mut rotation = self.panorama_rotation;
+            rotation.update(0.0, 0.0)
+        };
+        super::PANORAMA.set(Some([view + 180.0, 10.0]));
         let atlas = &self.gui.atlas;
-        ui::menu_background(&mut batch, atlas, 0.0, 0.0, w, h, false);
+        batch.fill(atlas, 0.0, 0.0, w, h, 0x5000_0000);
         let buttons = self
             .title
             .as_ref()
@@ -177,7 +184,7 @@ impl Game<'_> {
         let [x, y, dw, dh] = layout.doll;
         let size = (dh / 2.3).floor();
         self.draw_player_turned(&mut batch, [x, y, x + dw, y + dh], size, 0.0625, Some(yaw));
-        self.present_lower(&batch, MENU_BACKGROUND);
+        self.present_lower(&mut batch, MENU_BACKGROUND);
     }
 
     /// The title screen's player wears the player's skin before any world: the launcher's
@@ -377,10 +384,13 @@ impl Game<'_> {
     ) {
         let atlas = &self.gui.atlas;
         let [x, y, w, h] = rect;
-        let sprite = if enabled {
-            "gui/sprites/widget/button"
-        } else {
+        // Focus is vanilla's: the button's highlighted (white-edged) sprite.
+        let sprite = if !enabled {
             "gui/sprites/widget/button_disabled"
+        } else if chosen {
+            "gui/sprites/widget/button_highlighted"
+        } else {
+            "gui/sprites/widget/button"
         };
         ui::nine_slice(batch, atlas, sprite, x, y, w, h, u32::MAX);
         let color = if enabled { u32::MAX } else { 0xFFA0_A0A0 };
@@ -392,9 +402,6 @@ impl Game<'_> {
             color,
             true,
         );
-        if chosen {
-            outline(batch, atlas, rect, 0xFF3F_E0FF);
-        }
     }
 
     /// The pause menu's buttons: vanilla's, in its order, one column.
@@ -425,13 +432,15 @@ impl Game<'_> {
         let mut batch = lower_batch(size);
         let (w, h) = (batch.width, batch.height);
         let entries = self.pause_entries();
-        let (title, rects) = dual_menu::pause_menu(w, h, entries.len());
+        // Inside the frame: 6 kept clear of its bottom border.
+        let (title, rects) = dual_menu::pause_menu(w, h - 6.0, entries.len());
         for [x, y] in taps {
             let p = [x / batch.scale, y / batch.scale];
             if let Some(i) = touch::rect_at(&rects, p) {
                 let id = entries[i].0;
                 self.pause_focus = Some(id);
                 self.audio.play_button_click();
+                self.android_touch_haptic(12);
                 if let Err(error) = self.execute_pause_action(id) {
                     log::warn!("Second screen: {error}");
                 }
@@ -440,29 +449,24 @@ impl Game<'_> {
                 }
             }
         }
-        // The 3DS's panel: a light title bar with the pause sign, buttons on a darker inset.
-        let atlas = &self.gui.atlas;
-        panel(&mut batch, atlas, [0.0, 0.0, w, h]);
-        let [_, ty, _, th] = title;
+        // As the panel: the world's sky, and the frame holding the title (with the pause
+        // sign) and the buttons.
+        self.draw_panel_sky(&mut batch, [0.0, 0.0, w, h], [0.0, 0.0, w, h], false);
+        super::draw_frame(&mut batch, &self.gui.atlas, [2.0, 2.0, w - 4.0, h - 4.0]);
+        let [_, ty, _, _] = title;
         let label = self.translate("menu.paused", "Game Paused");
         let atlas = &self.gui.atlas;
-        centered(
-            &mut batch,
-            atlas,
-            &label,
-            [0.0, ty + 5.0, w],
-            super::menu::TEXT,
-            false,
-        );
-        for dx in [6.0, 11.0] {
-            batch.fill(atlas, dx, ty + 4.0, 3.0, th - 7.0, 0xFF40_4040);
+        let ty = ty + 10.0;
+        let text = super::menu::TEXT;
+        centered(&mut batch, atlas, &label, [0.0, ty, w], text, false);
+        for dx in [12.0, 17.0] {
+            batch.fill(atlas, dx, ty - 1.0, 3.0, 9.0, text);
         }
-        batch.fill(atlas, 6.0, th + 2.0, w - 12.0, h - th - 6.0, 0xFF55_5555);
         let focus = self.pause_focus;
         for ((id, label), rect) in entries.iter().zip(rects) {
             self.lower_button(&mut batch, rect, label, true, focus == Some(*id));
         }
-        self.present_lower(&batch, BACKGROUND);
+        self.present_lower(&mut batch, MENU_BACKGROUND);
     }
 
     /// A world loading (or a server being joined): Minecraft's own loading screen, with the
@@ -482,7 +486,7 @@ impl Game<'_> {
                 None => level_loading::draw(&mut batch, atlas, None, None),
             }
         }
-        self.present_lower(&batch, MENU_BACKGROUND);
+        self.present_lower(&mut batch, MENU_BACKGROUND);
     }
 
     /// The sign being written, as New 3DS Edition's prompt but with the system keyboard: the
@@ -533,12 +537,12 @@ impl Game<'_> {
                 batch.text(atlas, text, x + 4.0, y + 5.0, u32::MAX, true);
             }
             if i == current {
-                outline(&mut batch, atlas, rect, 0xFF3F_E0FF);
+                outline(&mut batch, atlas, rect, u32::MAX);
             }
         }
         let label = self.translate("gui.done", "Done");
         self.lower_button(&mut batch, done, &label, true, false);
-        self.present_lower(&batch, BACKGROUND);
+        self.present_lower(&mut batch, BACKGROUND);
     }
 
     /// The sign's four lines as written, and the one being written.
@@ -606,7 +610,7 @@ impl Game<'_> {
             2.0,
             u32::MAX,
         );
-        if let Some(cause) = &self.ui.death_text {
+        if let Some(cause) = self.death_cause() {
             let cw = atlas.font.width_text(cause);
             batch.text_styled(
                 atlas,

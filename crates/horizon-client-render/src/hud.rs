@@ -1150,22 +1150,41 @@ fn y_span(vertices: &[HudVertex]) -> Option<(f32, f32)> {
         }))
     })
 }
+/// A dual-screen handheld's second screen draws the experience bar (bit 0) and the level
+/// number (bit 1) under its hotbar: `dual_screen_bars` leaves them off the window.
+static DUAL_EXPERIENCE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Whether the second screen draws the experience bar and the level number this frame.
+pub fn set_dual_experience_elsewhere(bar: bool, number: bool) {
+    let bits = u8::from(bar) | u8::from(number) << 1;
+    DUAL_EXPERIENCE.store(bits, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Scale the vertices in `range` by `k` about `pivot`.
+fn scale_vertices(batch: &mut HudBatch, range: std::ops::Range<usize>, pivot: [f32; 2], k: f32) {
+    for v in &mut batch.vertices[range] {
+        v.pos = [0, 1].map(|i| pivot[i] + (v.pos[i] - pivot[i]) * k);
+    }
+}
 /// The left and right of some vertices.
 fn x_span(vertices: &[HudVertex]) -> Option<(f32, f32)> {
     vertices.iter().map(|v| v.pos[0]).fold(None, |span, x| {
         Some(span.map_or((x, x), |(l, r): (f32, f32)| (l.min(x), r.max(x))))
     })
 }
-/// Dual-screen HUD, after New 3DS Edition's top screen (the hotbar is on the other screen),
-/// anchored to the screen's corners: the bars vanilla stacks up from the hotbar (`band`:
-/// experience, hearts, food, air, a mount's hearts) are stacked down from the top edge,
-/// `margin` GUI pixels in. The experience bar (or the jump or locator bar in its place) runs
-/// across the top, the level number centred under it; vanilla's left column (hearts) goes to
-/// the top left corner, its right one (food, a mount's hearts) to the top right, extra rows
-/// under them. The armor row (`armor`, inside `band`) goes to the bottom left corner, the air
-/// bubbles (`air`, inside `band`) to the bottom right, and the boss bars (`bosses`) under the
-/// band. Each sprite keeps its look; only its row is mirrored. The vanilla layouts themselves
-/// stay as they are.
+/// Dual-screen HUD, after New 3DS Edition's top screen (the hotbar is on the other screen):
+/// the bars vanilla stacks up from the hotbar (`band`: experience, hearts, food, air, a
+/// mount's hearts) are stacked down from the top edge, `margin` GUI pixels in. The experience
+/// bar (or the jump or locator bar in its place) keeps its width at the top centre, the level
+/// number centred just under it (moved whole, not mirrored: vanilla's overlaps the bar's top);
+/// vanilla's left column (hearts) goes to the top left corner and its right one (food, a
+/// mount's hearts) to the top right, extra rows under them, up against the top edge beside the
+/// bar (under its height only where they would reach it). The armor row (`armor`, inside
+/// `band`) goes to the bottom left corner, the air bubbles (`air`, inside `band`, after
+/// `armor`) to the bottom right, and the boss bars (`bosses`) under the band. All of it is
+/// drawn one GUI scale larger (4 to 5...: the sprites stay on whole pixels), or as large as
+/// the bar fits across, each part from the edge or corner it hugs. Each sprite keeps its look;
+/// only its row is mirrored. The vanilla layouts themselves stay as they are.
 pub fn dual_screen_bars(
     batch: &mut HudBatch,
     band: std::ops::Range<usize>,
@@ -1174,13 +1193,38 @@ pub fn dual_screen_bars(
     bosses: std::ops::Range<usize>,
     margin: f32,
 ) {
+    let grow = (batch.scale + 1.0) / batch.scale.max(1.0);
+    dual_screen_bars_grown(batch, band, armor, air, bosses, margin, grow);
+}
+/// [`dual_screen_bars`], `grow` times larger.
+#[allow(clippy::too_many_arguments)]
+fn dual_screen_bars_grown(
+    batch: &mut HudBatch,
+    band: std::ops::Range<usize>,
+    armor: std::ops::Range<usize>,
+    air: std::ops::Range<usize>,
+    bosses: std::ops::Range<usize>,
+    margin: f32,
+    grow: f32,
+) {
     let (w, h) = (batch.width, batch.height);
     // Vanilla: `width / 2` in whole pixels; the bars 91 to each side; the experience bar 5
     // tall at `height - 29`, ending 24 above the bottom (the hotbar's 22, and 2).
     let mid = (w / 2.0).floor();
     let axis = h - 24.0 + margin;
-    let stretch = ((w - 2.0 * margin) / 182.0).max(1.0);
+    let grow = grow.min((w - 2.0 * margin) / 182.0).max(1.0);
+    // The level number's text, `height - 35` in vanilla, one pixel under the bar's outline
+    // gap: the bar ends `margin + 5` down, the number's outline starts a pixel above its text.
+    let number_dy = margin + 7.0 - (h - 35.0);
+    // From vanilla's columns (91 to each side of the middle) to the corners.
     let (left, right) = (margin - (mid - 91.0), (w - margin) - (mid + 91.0));
+    // The corner rows (81 wide) come up past the bar's height (vanilla's 5 and the 1 above
+    // it) when they stay 2 clear of its ends.
+    let lift = if margin + 81.0 * grow + 2.0 <= mid - 91.0 * grow {
+        6.0
+    } else {
+        0.0
+    };
     let mut bottom = None::<f32>;
     for start in band.clone().step_by(6) {
         let quad = start..(start + 6).min(band.end);
@@ -1193,33 +1237,45 @@ pub fn dual_screen_bars(
         ) else {
             continue;
         };
-        let dy = axis - low - top;
         let cx = (l + r) / 2.0;
-        let across = |x: f32| {
-            if top >= h - 29.5 {
-                // The bar: stretched across the top.
-                mid + (x - mid) * stretch
-            } else if (cx - mid).abs() < 16.0 && top >= h - 37.0 {
-                // The level number: kept in the middle.
-                x
-            } else if cx < mid {
-                x + left
-            } else {
-                x + right
+        let bar = top >= h - 29.5;
+        let number = !bar && (cx - mid).abs() < 16.0 && top >= h - 37.0;
+        // Drawn on the second screen instead: collapsed to nothing here.
+        let elsewhere = DUAL_EXPERIENCE.load(std::sync::atomic::Ordering::Relaxed);
+        if (bar && elsewhere & 1 != 0) || (number && elsewhere & 2 != 0) {
+            let p = batch.vertices[start].pos;
+            for v in &mut batch.vertices[quad] {
+                v.pos = p;
             }
-        };
-        for v in &mut batch.vertices[quad] {
-            v.pos = [across(v.pos[0]), v.pos[1] + dy];
+            continue;
         }
-        bottom = Some(bottom.map_or(axis - top, |b| b.max(axis - top)));
+        let mirrored = axis - low - top;
+        // Where it goes, and the point it grows from: the top centre or a top corner.
+        let (dx, dy, pivot) = if bar {
+            (0.0, mirrored, [mid, margin])
+        } else if number {
+            (0.0, number_dy, [mid, margin])
+        } else if cx < mid {
+            (left, mirrored - lift, [margin, margin])
+        } else {
+            (right, mirrored - lift, [w - margin, margin])
+        };
+        for v in &mut batch.vertices[quad.clone()] {
+            v.pos = [v.pos[0] + dx, v.pos[1] + dy];
+        }
+        scale_vertices(batch, quad.clone(), pivot, grow);
+        if let Some((_, low)) = y_span(&batch.vertices[quad]) {
+            bottom = Some(bottom.map_or(low, |b| b.max(low)));
+        }
     }
     // The armor and the air at the bottom corners.
-    for (range, dx) in [(armor, left), (air, right)] {
+    for (range, dx, corner) in [(armor, left, margin), (air, right, w - margin)] {
         if let Some((_, low)) = y_span(&batch.vertices[range.clone()]) {
             let dy = h - margin - low;
-            for v in &mut batch.vertices[range] {
+            for v in &mut batch.vertices[range.clone()] {
                 v.pos = [v.pos[0] + dx, v.pos[1] + dy];
             }
+            scale_vertices(batch, range, [corner, h - margin], grow);
         }
     }
     if let (Some(bottom), Some((top, _))) = (bottom, y_span(&batch.vertices[bosses.clone()])) {
@@ -2620,7 +2676,7 @@ mod tests {
     }
 
     #[test]
-    fn dual_screen_bars_anchor_to_the_corners() {
+    fn dual_screen_bars_hug_the_top_centre_and_the_corners() {
         // 1280x720: GUI scale 3, 427x240; the middle 213, the bars from 122 to 304.
         let mut batch = HudBatch::new([1280, 720]);
         assert_eq!((batch.width, batch.height), (427.0, 240.0));
@@ -2643,29 +2699,60 @@ mod tests {
         let air = batch.vertices.len();
         rect(&mut batch, [295.0, 191.0, 304.0, 200.0]); // 7: the air bubbles
         let end = batch.vertices.len();
-        dual_screen_bars(&mut batch, band..end, armor..air, air..end, 0..band, 1.0);
+        let unmoved = batch.vertices.clone();
+        dual_screen_bars_grown(
+            &mut batch,
+            band..end,
+            armor..air,
+            air..end,
+            0..band,
+            1.0,
+            1.0,
+        );
         let at = |quad: usize| {
             let q = &batch.vertices[quad * 6..quad * 6 + 6];
             let ((l, r), (t, b)) = (x_span(q).unwrap(), y_span(q).unwrap());
             [l, t, r, b]
         };
-        // Rows mirrored about y 217 (240 - 24 + 1). The bar stretched about 213 by 425 / 182:
-        // 91 * 425 / 182 = 212.5 each side.
-        assert_eq!(at(1), [0.5, 1.0, 425.5, 6.0]);
-        // The hearts to the left edge (122 - 1 to the left), the food to the right (426 - 304).
-        assert_eq!(at(2), [1.0, 7.0, 10.0, 16.0]);
-        assert_eq!(at(3), [1.0, 17.0, 10.0, 26.0]);
-        assert_eq!(at(4), [417.0, 7.0, 426.0, 16.0]);
-        // The level number stays in the middle, under the bar.
-        assert_eq!(at(5), [210.0, 4.0, 216.0, 12.0]);
+        // Rows mirrored about y 217 (240 - 24 + 1). The bar keeps its 182 at the top centre.
+        assert_eq!(at(1), [122.0, 1.0, 304.0, 6.0]);
+        // The hearts in the top left corner (122 - 1 to the left), the food in the top right
+        // (426 - 304 to the right), up against the top edge beside the bar.
+        assert_eq!(at(2), [1.0, 1.0, 10.0, 10.0]);
+        assert_eq!(at(3), [1.0, 11.0, 10.0, 20.0]);
+        assert_eq!(at(4), [417.0, 1.0, 426.0, 10.0]);
+        // The level number stays in the middle, clear of the bar (which ends at 6).
+        assert_eq!(at(5), [210.0, 8.0, 216.0, 16.0]);
         // The armor and the air at the bottom corners, ending 1 above the bottom.
         assert_eq!(at(6), [1.0, 230.0, 10.0, 239.0]);
         assert_eq!(at(7), [417.0, 230.0, 426.0, 239.0]);
-        // The boss bar under the band (bottom 26), 2 lower.
-        assert_eq!(at(0), [0.0, 28.0, 9.0, 33.0]);
+        // The boss bar under the band (the second heart row's bottom, 20), 2 lower.
+        assert_eq!(at(0), [0.0, 22.0, 9.0, 27.0]);
         // Sprites keep their orientation: the top edge still has the texture's top.
         let heart = &batch.vertices[12..18];
-        assert!(heart.iter().all(|v| (v.pos[1] == 7.0) == (v.uv[1] == 0.0)));
+        assert!(heart.iter().all(|v| (v.pos[1] == 1.0) == (v.uv[1] == 0.0)));
+        // Twice as large: the bar from the top centre (213, 1), the rows from their corners;
+        // 162-wide heart rows would reach the 364-wide bar, so they stay under its height.
+        batch.vertices = unmoved;
+        dual_screen_bars_grown(
+            &mut batch,
+            band..end,
+            armor..air,
+            air..end,
+            0..band,
+            1.0,
+            2.0,
+        );
+        let at = |quad: usize| {
+            let q = &batch.vertices[quad * 6..quad * 6 + 6];
+            let ((l, r), (t, b)) = (x_span(q).unwrap(), y_span(q).unwrap());
+            [l, t, r, b]
+        };
+        assert_eq!(at(1), [31.0, 1.0, 395.0, 11.0]);
+        assert_eq!(at(2), [1.0, 13.0, 19.0, 31.0]);
+        assert_eq!(at(4), [408.0, 13.0, 426.0, 31.0]);
+        assert_eq!(at(6), [1.0, 221.0, 19.0, 239.0]);
+        assert_eq!(at(0), [0.0, 53.0, 9.0, 58.0]);
     }
 
     #[test]

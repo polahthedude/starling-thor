@@ -583,6 +583,28 @@ impl Game<'_> {
 
     /// `RecipeBookComponent.getXOrigin` / `getYOrigin` (`widthTooNarrow`
     /// centres the book over the menu).
+    /// The open recipe book's panel on `batch` (the window's GUI), where vanilla puts it; none
+    /// while the screen has no book or it is closed.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(super) fn open_recipe_book_rect(&self, batch: &HudBatch) -> Option<[f32; 4]> {
+        let book = self.active_book()?;
+        if !self.book_open(book) {
+            return None;
+        }
+        let (x, y) = self.book_origin(batch);
+        Some([x, y, WIDTH, HEIGHT])
+    }
+    /// The open recipe book's panel alone, on `batch` (a dual screen's window, its menu on the
+    /// second screen); its rect, or none while closed.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(super) fn draw_open_recipe_book(&mut self, batch: &mut HudBatch) -> Option<[f32; 4]> {
+        let rect = self.open_recipe_book_rect(batch)?;
+        let book = self.active_book()?;
+        self.ensure_book();
+        self.refresh_book_view(book);
+        self.draw_book_panel(batch, book);
+        Some(rect)
+    }
     fn book_origin(&self, batch: &HudBatch) -> (f32, f32) {
         let offset = if batch.width < NARROW { 0.0 } else { 86.0 };
         (

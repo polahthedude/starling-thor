@@ -28,6 +28,18 @@ pub fn set_current_hud_opacity_scale(scale: f32) {
     LAST_HUD_OPACITY_BITS.store(clamped.to_bits(), Ordering::Relaxed);
 }
 
+static MENU_ELSEWHERE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A dual-screen handheld has the open screen on its other display, touched there: a finger on
+/// the window isn't touch play, and its touch controls stay hidden (`update_visibility`).
+pub fn set_menu_elsewhere(elsewhere: bool) {
+    MENU_ELSEWHERE.store(elsewhere, Ordering::Relaxed);
+}
+
+pub fn menu_elsewhere() -> bool {
+    MENU_ELSEWHERE.load(Ordering::Relaxed)
+}
+
 pub mod custom;
 pub mod editor;
 pub use custom::CustomButton;
@@ -175,33 +187,70 @@ pub fn hotbar_slot(width: f32, height: f32, point: [f32; 2]) -> Option<usize> {
 pub struct DualPanel {
     /// The band's height: the 22-pixel hotbar, 1 pixel from the top.
     pub band: f32,
-    pub coords: [f32; 4],
+    /// The sky: the whole screen, under everything.
+    pub sky: [f32; 4],
+    /// The sky's open part between the hotbar and the frame, where the sun and moon go.
+    pub open: [f32; 4],
+    /// The coordinates and the biome: a line inside the frame, under the map and buttons.
+    pub info: [f32; 4],
+    /// The frame holding the map, the buttons and the info line.
+    pub frame: [f32; 4],
     pub map: [f32; 4],
-    pub buttons: [[f32; 4]; 3],
+    /// Inventory, crafting, chat, pause.
+    pub buttons: [[f32; 4]; 4],
 }
 /// About 200 GUI pixels across, so the hotbar spans the screen as on the 3DS.
 pub fn dual_panel_scale(width_px: u32) -> f32 {
     (width_px as f32 / 200.0).round().max(1.0)
 }
+/// The panel's layout, `width` by `height` GUI pixels: the sky under all of it, the hotbar band
+/// over its top, and a frame along the bottom (8 pixels in: its bevel and padding) holding the
+/// map beside a column of three rows as tall together as the map (inventory, crafting, then
+/// chat and pause side by side, each half the row), the info line under both. What is left
+/// between the hotbar and the frame is the sky's open part. Everything on whole pixels.
 pub fn dual_panel(width: f32, height: f32) -> DualPanel {
     const PAD: f32 = 6.0;
     const GAP: f32 = 4.0;
+    const INSET: f32 = 8.0;
+    const INFO: f32 = 10.0;
     let band = 24.0;
-    let coords = [0.0, band + 3.0, width, 12.0];
-    let top = coords[1] + coords[3] + PAD;
-    // The 3DS's buttons are about 0.38 of the width left beside the map.
-    let column = ((width - 3.0 * PAD) * 0.38).floor();
-    let side = (width - 3.0 * PAD - column)
-        .min(height - top - PAD)
-        .max(0.0)
-        .floor();
-    let button = ((side - 2.0 * GAP) / 3.0).floor();
-    let x = width - PAD - column;
+    // The least of the sky left open under the hotbar.
+    let least_open = 36.0;
+    let inner = (width - 2.0 * PAD - 2.0 * INSET).max(0.0);
+    // The buttons' column a quarter of the width, the map as large as the rest allows.
+    let column = (inner * 0.26).floor();
+    let room = (height - PAD - 2.0 * INSET - 2.0 * GAP - INFO - band - least_open).max(0.0);
+    let side = (inner - column - GAP).min(room).max(0.0);
+    // Three rows and two gaps exactly as tall as the map.
+    let button = ((side - 2.0 * GAP) / 3.0).floor().max(0.0);
+    let side = 3.0 * button + 2.0 * GAP;
+    // The column takes what the map's rounding leaves, 4 from it.
+    let column = inner - side - GAP;
+    let frame_height = side + 2.0 * INSET + GAP + INFO;
+    let frame = [
+        PAD,
+        height - PAD - frame_height,
+        width - 2.0 * PAD,
+        frame_height,
+    ];
+    let (left, top) = (frame[0] + INSET, frame[1] + INSET);
+    let x = left + side + GAP;
+    let row = |i: f32| top + i * (button + GAP);
+    // Chat and pause share the last row: half of it each, the gap between.
+    let half = ((column - GAP) / 2.0).floor();
     DualPanel {
         band,
-        coords,
-        map: [PAD, top, side, side],
-        buttons: std::array::from_fn(|i| [x, top + i as f32 * (button + GAP), column, button]),
+        sky: [0.0, 0.0, width, height],
+        open: [0.0, band, width, (frame[1] - GAP - band).max(0.0)],
+        info: [left, top + side + GAP, inner, INFO],
+        frame,
+        map: [left, top, side, side],
+        buttons: [
+            [x, row(0.0), column, button],
+            [x, row(1.0), column, button],
+            [x, row(2.0), half, button],
+            [x + column - half, row(2.0), half, button],
+        ],
     }
 }
 /// The dual-screen inventory and crafting screens (a handheld's lower screen, after New 3DS
@@ -210,39 +259,57 @@ pub fn dual_panel(width: f32, height: f32) -> DualPanel {
 pub mod dual_menu {
     pub const SLOT: f32 = 18.0;
     pub const TAB: f32 = 22.0;
-    /// The player's box between the armor column and the off-hand slot (`DOLL` wide).
-    const DOLL: f32 = 52.0;
+    /// The creative grid's cells: the hotbar's slots' pitch, so its columns sit under them.
+    pub const CELL: f32 = 20.0;
+    /// How far under the hotbar band the screens' contents start: a 2-pixel gap, then the
+    /// frame's border and padding (`FRAME`).
+    pub const CONTENT: f32 = 2.0 + FRAME;
+    /// The frame's border (the container texture's 4 pixels) and 1 of padding, between its
+    /// edge and what it holds.
+    pub const FRAME: f32 = 5.0;
+    /// The creative scrollbar: vanilla's scroller, 12 by 15, on its track.
+    pub const SCROLLER: [f32; 2] = [12.0, 15.0];
+    /// The frame around a screen's contents, edge to edge: from 2 under the hotbar band to
+    /// 2 above the tab bar's strip (`tabs_top`).
+    pub fn content_frame(width: f32, band: f32, tabs_top: f32) -> [f32; 4] {
+        [0.0, band + 2.0, width, (tabs_top - 4.0 - band).max(0.0)]
+    }
+    /// The inventory tab's slots: the hotbar's pitch (`CELL`), each column under a hotbar
+    /// slot, so the two read as one grid.
+    pub const INVENTORY_SLOT: f32 = CELL;
     /// The inventory tab's height under the hotbar band: the armor column, a gap, the 27
     /// slots.
-    pub const INVENTORY_HEIGHT: f32 = 3.0 + 4.0 * SLOT + 4.0 + 3.0 * SLOT;
-    /// The armor column, the player's box and the off-hand slot together, centered.
-    fn inventory_left(width: f32) -> f32 {
-        ((width - (SLOT + 4.0 + DOLL + 4.0 + SLOT)) / 2.0).floor()
+    pub const INVENTORY_HEIGHT: f32 = 3.0 + 4.0 * INVENTORY_SLOT + 4.0 + 3.0 * INVENTORY_SLOT;
+    /// The left of the hotbar's first slot, `width` wide: vanilla's `width / 2 - 91`, 1 in.
+    fn hotbar_column(width: f32, column: f32) -> f32 {
+        (width / 2.0).floor() - 90.0 + column * CELL
     }
     /// The slots of the inventory tab, by the game's slot numbers, as the console editions'
-    /// inventory: the armor (500 to 503) in a column, the player's box beside it
-    /// (`inventory_doll`) with the off-hand slot (504) at its lower right, then the 27 slots of
-    /// the main inventory (9 to 35); each its 18-pixel square's top left.
+    /// inventory but on the hotbar's columns: the armor (500 to 503) down the third, the
+    /// player's box (`inventory_doll`) across the fourth to sixth, the off-hand slot (504) at
+    /// the foot of the seventh, then the 27 slots of the main inventory (9 to 35) under all
+    /// nine; each its `INVENTORY_SLOT` square's top left.
     pub fn inventory(width: f32, top: f32) -> Vec<(usize, [f32; 2])> {
+        const S: f32 = INVENTORY_SLOT;
         let mut out = Vec::with_capacity(32);
-        let x = inventory_left(width);
         let y = top + 3.0;
+        let armor = hotbar_column(width, 2.0);
         for i in 0..4 {
-            out.push((500 + i, [x, y + i as f32 * SLOT]));
+            out.push((500 + i, [armor, y + i as f32 * S]));
         }
-        out.push((504, [x + SLOT + 4.0 + DOLL + 4.0, y + 3.0 * SLOT]));
-        let x = ((width - 9.0 * SLOT) / 2.0).floor();
-        let y = y + 4.0 * SLOT + 4.0;
+        out.push((504, [hotbar_column(width, 6.0), y + 3.0 * S]));
+        let y = y + 4.0 * S + 4.0;
         for i in 0..27 {
             let (c, r) = ((i % 9) as f32, (i / 9) as f32);
-            out.push((9 + i, [x + c * SLOT, y + r * SLOT]));
+            out.push((9 + i, [hotbar_column(width, c), y + r * S]));
         }
         out
     }
-    /// The player's box on the inventory tab, as tall as the armor column.
+    /// The player's box on the inventory tab, as tall as the armor column, between it and
+    /// the off-hand slot's column, 4 from each.
     pub fn inventory_doll(width: f32, top: f32) -> [f32; 4] {
-        let x = inventory_left(width) + SLOT + 4.0;
-        [x, top + 3.0, DOLL, 4.0 * SLOT]
+        let x = hotbar_column(width, 3.0) + 4.0;
+        [x, top + 3.0, 3.0 * CELL - 8.0, 4.0 * INVENTORY_SLOT]
     }
     /// The largest GUI scale up to the panel's at which `tabs` tabs are square around their
     /// icons (`tab_scale`) and the inventory tab fits between the hotbar band (`band`) and
@@ -252,7 +319,7 @@ pub mod dual_menu {
         let fits = |scale: f32| {
             let width = (size_px[0] as f32 / scale).ceil();
             let height = (size_px[1] as f32 / scale).ceil();
-            band + INVENTORY_HEIGHT + 2.0 + tab_size(width, tabs) + 2.0 <= height
+            band + CONTENT + INVENTORY_HEIGHT + FRAME + 4.0 + tab_size(width, tabs) + 2.0 <= height
         };
         while scale > 1.0 && !fits(scale) {
             scale -= 1.0;
@@ -267,7 +334,8 @@ pub mod dual_menu {
             .min(TAB)
     }
     /// The largest GUI scale up to the panel's (`dual_panel_scale`) at which `tabs` tabs and
-    /// the inventory's are wide enough to hold an item's icon in a frame (18).
+    /// the inventory's are wide enough to hold an item's icon in a frame (18). Tabs that
+    /// scroll (`tabs_scrolled`) pass 0: any number fits.
     pub fn tab_scale(width_px: u32, tabs: usize) -> f32 {
         let mut scale = super::dual_panel_scale(width_px);
         while scale > 1.0 && tab_size((width_px as f32 / scale).ceil(), tabs) < 18.0 {
@@ -278,15 +346,42 @@ pub mod dual_menu {
     /// The tab bar along the bottom: `tabs` square category tabs from the left, then the
     /// inventory's at the right end, all `tab_size`.
     pub fn tabs(width: f32, height: f32, tabs: usize) -> (Vec<[f32; 4]>, [f32; 4]) {
-        let size = tab_size(width, tabs);
-        let y = height - size - 2.0;
-        let categories = (0..tabs)
-            .map(|i| [4.0 + i as f32 * (size + 1.0), y, size, size])
-            .collect();
-        (categories, [width - 4.0 - size, y, size, size])
+        let (categories, inventory, _) = tabs_scrolled(width, height, tabs, 0.0);
+        (categories, inventory)
     }
-    /// The creative screen's item grid: 9 columns of slots under the tab's title, as many rows
-    /// as fit above `bottom`, and a scrollbar beside them (its up arrow, track, down arrow).
+    /// The side of the tabs: `tab_size` when all of them fit across, else `TAB` and they
+    /// scroll.
+    fn scrolled_tab_size(width: f32, tabs: usize) -> f32 {
+        let fit = tab_size(width, tabs);
+        if fit >= 18.0 { fit } else { TAB }
+    }
+    /// The tab bar with its category tabs moved `scroll` to the left: those, the inventory's
+    /// (fixed at the right end) and the part of the bar the category tabs are seen in.
+    pub fn tabs_scrolled(
+        width: f32,
+        height: f32,
+        tabs: usize,
+        scroll: f32,
+    ) -> (Vec<[f32; 4]>, [f32; 4], [f32; 4]) {
+        let size = scrolled_tab_size(width, tabs);
+        let y = height - size - 2.0;
+        let inventory = [width - 4.0 - size, y, size, size];
+        let view = [4.0, y, (inventory[0] - 4.0 - 4.0).max(0.0), size];
+        let categories = (0..tabs)
+            .map(|i| [4.0 + i as f32 * (size + 1.0) - scroll, y, size, size])
+            .collect();
+        (categories, inventory, view)
+    }
+    /// How far the category tabs scroll: their row's width past the part they are seen in.
+    pub fn tabs_scroll_max(width: f32, height: f32, tabs: usize) -> f32 {
+        let size = scrolled_tab_size(width, tabs);
+        let (_, _, view) = tabs_scrolled(width, height, tabs, 0.0);
+        (tabs as f32 * (size + 1.0) - 1.0 - view[2]).max(0.0)
+    }
+    /// The creative screen's item grid: 9 columns of `CELL` slots under the tab's title, each
+    /// under the hotbar's slot (`width / 2 - 91` and 1 in, 20 apart), as many rows as fit above
+    /// `bottom`, and a scrollbar just right of them, inside the frame (its up arrow, track,
+    /// down arrow).
     #[derive(Clone, Debug, PartialEq)]
     pub struct Grid {
         pub title: [f32; 4],
@@ -297,20 +392,21 @@ pub mod dual_menu {
         pub down: [f32; 4],
     }
     pub fn grid(width: f32, top: f32, bottom: f32) -> Grid {
-        const BAR: f32 = 12.0;
-        let title = [0.0, top + 3.0, width, 10.0];
-        let y = top + 16.0;
-        let rows = (((bottom - y - 2.0) / SLOT).floor() as usize).max(1);
-        let x = ((width - (9.0 * SLOT + 4.0 + BAR)) / 2.0).floor();
-        let bx = x + 9.0 * SLOT + 4.0;
-        let h = rows as f32 * SLOT;
+        let title = [0.0, top, width, 10.0];
+        let y = top + 13.0;
+        let rows = (((bottom - y) / CELL).floor() as usize).max(1);
+        let x = (width / 2.0).floor() - 90.0;
+        // Just past the grid, kept inside the frame.
+        let bx = (x + 9.0 * CELL + 1.0).min(width - FRAME - SCROLLER[0]);
+        let h = rows as f32 * CELL;
         Grid {
             title,
             origin: [x, y],
             rows,
-            up: [bx, y, BAR, BAR],
-            track: [bx, y + BAR, BAR, h - 2.0 * BAR],
-            down: [bx, y + h - BAR, BAR, BAR],
+            // Vanilla's scrollbar has no arrows: the scroller alone, along the whole track.
+            up: [bx, y, 0.0, 0.0],
+            track: [bx, y, SCROLLER[0], h],
+            down: [bx, y + h, 0.0, 0.0],
         }
     }
     /// The title screen's buttons on the lower screen: Singleplayer and Multiplayer across it,
@@ -486,8 +582,8 @@ pub mod dual_menu {
         const BIG: f32 = 24.0;
         const GAP: f32 = 2.0;
         const ARROW: f32 = 12.0;
-        let header = [6.0, top + 3.0, width - 12.0, 10.0];
-        let row = top + 16.0 + 18.0;
+        let header = [FRAME + 2.0, top, width - 2.0 * (FRAME + 2.0), 10.0];
+        let row = top + 13.0 + 18.0;
         let n = visible.max(1);
         let span = (n - 1) as f32 * (CELL + GAP) + BIG;
         let mut x = ((width - span) / 2.0).floor();
@@ -503,8 +599,9 @@ pub mod dual_menu {
             x += size + GAP;
         }
         let mid = row + BIG / 2.0;
-        let left = [2.0, mid - ARROW / 2.0, ARROW, ARROW];
-        let right = [width - 2.0 - ARROW, mid - ARROW / 2.0, ARROW, ARROW];
+        // Inside the frame (`FRAME`).
+        let left = [FRAME + 2.0, mid - ARROW / 2.0, ARROW, ARROW];
+        let right = [width - FRAME - 2.0 - ARROW, mid - ARROW / 2.0, ARROW, ARROW];
         let [cx, cy, cw, ch] = chosen;
         let small = 16.0;
         let sx = cx + (cw - small) / 2.0;
@@ -519,7 +616,7 @@ pub mod dual_menu {
     }
     /// How many cells fit across, arrows and margins aside.
     pub fn carousel_fits(width: f32) -> usize {
-        (((width - 2.0 * 16.0 - 4.0 + 2.0) / 22.0).floor() as usize).max(1)
+        (((width - 2.0 * (FRAME + 2.0 + 12.0 + 2.0) + 2.0) / 22.0).floor() as usize).max(1)
     }
     /// The first group shown of `count` in `visible` cells, keeping `selected` near the
     /// middle.
@@ -655,6 +752,7 @@ impl TouchControls {
     }
 
     pub fn update_visibility(&mut self, touch_active: bool, dt: f32) {
+        let touch_active = touch_active && !menu_elsewhere();
         let target = if touch_active || self.editor.is_some() {
             1.0
         } else {
@@ -3182,30 +3280,36 @@ mod tests {
     #[test]
     fn dual_menu_lays_out_the_3ds_inventory_and_a_legacy_crafting_row() {
         use super::dual_menu::*;
-        // 207 wide (the Thor's lower screen at scale 6), below the 24-pixel hotbar band.
-        let slots = inventory(207.0, 24.0);
+        // 216 wide (the Thor's lower screen at scale 5), the contents from y 30: the hotbar's
+        // slots start at 216 / 2 - 91 + 1 = 18, 20 apart, and every slot here is in one of
+        // their columns, 20 square.
+        let slots = inventory(216.0, 30.0);
         assert_eq!(slots.len(), 32);
-        // The armor column, the player's box and the off-hand slot: 18 + 4 + 52 + 4 + 18 = 96
-        // wide from x 55, from y 27; the boots at the column's foot, the off-hand beside them.
-        assert_eq!(slots[0], (500, [55.0, 27.0]));
-        assert_eq!(slots[3], (503, [55.0, 81.0]));
-        assert_eq!(slots[4], (504, [133.0, 81.0]));
-        assert_eq!(inventory_doll(207.0, 24.0), [77.0, 27.0, 52.0, 72.0]);
-        // The inventory grid, 162 wide from x 22, 4 under the column (27 + 72 + 4).
-        assert_eq!(slots[5], (9, [22.0, 103.0]));
-        assert_eq!(slots[31], (35, [166.0, 139.0]));
-        // 24 + 133 + 2 + 22 + 2 = 183 doesn't fit the Thor's 180 at scale 6: 5 (216 tall).
+        // The armor down the third column (x 58) from y 33, the off-hand at the foot of the
+        // seventh (x 138), the player's box between (4 from each), as tall as the armor.
+        assert_eq!(slots[0], (500, [58.0, 33.0]));
+        assert_eq!(slots[3], (503, [58.0, 93.0]));
+        assert_eq!(slots[4], (504, [138.0, 93.0]));
+        assert_eq!(inventory_doll(216.0, 30.0), [82.0, 33.0, 52.0, 80.0]);
+        // The inventory grid under all nine columns, 4 under the armor (33 + 80 + 4).
+        assert_eq!(slots[5], (9, [18.0, 117.0]));
+        assert_eq!(slots[31], (35, [178.0, 157.0]));
+        // 24 + 6 + 147 + 4 + 4 + 22 + 2 = 209 doesn't fit 180 at scale 6: 5 (216 tall).
         assert_eq!(inventory_scale([1240, 1080], 7, 24.0), 5.0);
         let (categories, inventory_tab) = tabs(207.0, 180.0, 4);
         assert_eq!(categories[1], [27.0, 156.0, 22.0, 22.0]);
         assert_eq!(inventory_tab, [181.0, 156.0, 22.0, 22.0]);
         // (207 - 36 + 2) / 22: 7 cells; seven, the middle one 24 wide: 6 * 22 + 24 = 156.
         assert_eq!(carousel_fits(207.0), 7);
+        // From `top` (the frame's inside): the header, then the row 31 down.
         let row = carousel(207.0, 24.0, 7, 3);
-        assert_eq!(row.cells[0], [25.0, 60.0, 20.0, 20.0]);
-        assert_eq!(row.cells[3], [91.0, 58.0, 24.0, 24.0]);
-        assert_eq!(row.up, [95.0, 40.0, 16.0, 16.0]);
-        assert_eq!(row.down, [95.0, 84.0, 16.0, 16.0]);
+        assert_eq!(row.cells[0], [25.0, 57.0, 20.0, 20.0]);
+        assert_eq!(row.cells[3], [91.0, 55.0, 24.0, 24.0]);
+        assert_eq!(row.up, [95.0, 37.0, 16.0, 16.0]);
+        assert_eq!(row.down, [95.0, 81.0, 16.0, 16.0]);
+        // Its arrows inside the frame's 5.
+        assert_eq!(row.left[0], 7.0);
+        assert_eq!(row.right[0] + row.right[2], 200.0);
         // The window keeps the selected group in the middle, and stops at the ends.
         assert_eq!(window(0, 20, 7), 0);
         assert_eq!(window(10, 20, 7), 7);
@@ -3295,18 +3399,26 @@ mod tests {
     #[test]
     fn creative_grid_fills_the_lower_screen_with_a_scrollbar() {
         use super::dual_menu::grid;
-        // The Thor at scale 6: between the 24 band and the tab bar at 156, 6 rows from y 40.
-        let g = grid(207.0, 24.0, 154.0);
-        assert_eq!(g.rows, 6);
-        // 9 slots, a 4 gap and the 12 bar: 178 wide, from x 14; the bar at 180.
-        assert_eq!(g.origin, [14.0, 40.0]);
-        assert_eq!(g.up, [180.0, 40.0, 12.0, 12.0]);
-        assert_eq!(g.track, [180.0, 52.0, 12.0, 84.0]);
-        assert_eq!(g.down, [180.0, 136.0, 12.0, 12.0]);
-        // Ten tabs and the inventory's narrow to 16 squares to fit: (207 - 12 - 10) / 11.
-        let (tabs, inventory) = super::dual_menu::tabs(207.0, 180.0, 10);
-        assert_eq!(tabs[9], [157.0, 162.0, 16.0, 16.0]);
-        assert_eq!(inventory, [187.0, 162.0, 16.0, 16.0]);
+        // The Thor's lower screen at scale 5 (216 wide): the hotbar's slots start at
+        // 216 / 2 - 91 + 1 = 18, 20 apart; the grid's 20-pixel cells sit under them, the
+        // scrollbar's track 1 past them, vanilla's scroller's 12 wide, the whole grid tall.
+        let g = grid(216.0, 34.0, 200.0);
+        assert_eq!(g.origin, [18.0, 47.0]);
+        assert_eq!(g.rows, 7);
+        assert_eq!(g.track, [199.0, 47.0, 12.0, 140.0]);
+        assert_eq!((g.up[2], g.down[2]), (0.0, 0.0));
+        // Ten tabs and the inventory's don't fit 18 squares across 207: they keep 22 and
+        // scroll, the inventory's fixed at the right end.
+        let (tabs, inventory, view) = super::dual_menu::tabs_scrolled(207.0, 180.0, 10, 0.0);
+        assert_eq!(inventory, [181.0, 156.0, 22.0, 22.0]);
+        assert_eq!(view, [4.0, 156.0, 173.0, 22.0]);
+        assert_eq!(tabs[9], [211.0, 156.0, 22.0, 22.0]);
+        // Ten tabs 23 apart, 229 wide, in a 173-wide view: 56 to scroll; scrolled all the
+        // way, the last one ends where the view does.
+        let max = super::dual_menu::tabs_scroll_max(207.0, 180.0, 10);
+        assert_eq!(max, 56.0);
+        let (tabs, _, _) = super::dual_menu::tabs_scrolled(207.0, 180.0, 10, max);
+        assert_eq!(tabs[9][0] + tabs[9][2], 177.0);
         // Too small for an icon's frame at the Thor's panel scale (6, 1240 wide): 5, where
         // (248 - 22) / 11 is 20.
         assert_eq!(super::dual_menu::tab_scale(1240, 10), 5.0);
@@ -3317,26 +3429,38 @@ mod tests {
 
     #[test]
     fn dual_panel_follows_the_3ds_touch_screen_on_the_thor() {
-        // The AYN Thor's lower screen, 1240x1080: scale 6, 207x180 GUI pixels.
-        assert_eq!(dual_panel_scale(1240), 6.0);
-        let panel = dual_panel(207.0, 180.0);
-        // Coordinates under the 24-pixel hotbar band; below them, from y 45: the map, 118
-        // square (207 - 3 * 6 - 71 wide, under 180 - 45 - 6 tall), beside a 71-wide column
-        // ((207 - 18) * 0.38) of three 36-tall buttons with 4-pixel gaps.
-        assert_eq!(panel.coords, [0.0, 27.0, 207.0, 12.0]);
-        assert_eq!(panel.map, [6.0, 45.0, 118.0, 118.0]);
+        // The AYN Thor's lower screen, 1080x1240: scale 5, 216x248 GUI pixels.
+        assert_eq!(dual_panel_scale(1080), 5.0);
+        let panel = dual_panel(216.0, 248.0);
+        // The frame 6 in from the sides and the bottom; inside its 8 (bevel and padding), 188
+        // wide: the map 134 square (188 - 48 - 4 is 136, rounded to three 42-tall rows and
+        // two gaps) and, 4 from it, the 50-wide column of those rows (inventory, crafting,
+        // then chat and pause 23 wide each with the gap between); the info line 4 under both.
+        assert_eq!(panel.frame, [6.0, 78.0, 204.0, 164.0]);
+        assert_eq!(panel.map, [14.0, 86.0, 134.0, 134.0]);
         assert_eq!(
             panel.buttons,
             [
-                [130.0, 45.0, 71.0, 36.0],
-                [130.0, 85.0, 71.0, 36.0],
-                [130.0, 125.0, 71.0, 36.0]
+                [152.0, 86.0, 50.0, 42.0],
+                [152.0, 132.0, 50.0, 42.0],
+                [152.0, 178.0, 23.0, 42.0],
+                [179.0, 178.0, 23.0, 42.0]
             ]
         );
-        assert_eq!(rect_at(&panel.buttons, [150.0, 100.0]), Some(1));
-        assert_eq!(rect_at(&panel.buttons, [150.0, 122.0]), None);
-        // A short screen: the map shrinks to the height left.
-        assert_eq!(dual_panel(207.0, 120.0).map[3], 69.0);
+        assert_eq!(panel.info, [14.0, 224.0, 188.0, 10.0]);
+        // The sky under everything, open from the hotbar to 4 above the frame: the arc's 50.
+        assert_eq!(panel.sky, [0.0, 0.0, 216.0, 248.0]);
+        assert_eq!(panel.open, [0.0, 24.0, 216.0, 50.0]);
+        assert_eq!(rect_at(&panel.buttons, [190.0, 200.0]), Some(3));
+        assert_eq!(rect_at(&panel.buttons, [177.0, 200.0]), None);
+        // A short screen: the map shrinks so the sky stays open under the hotbar, the
+        // column's rows still as tall together as it.
+        let short = dual_panel(216.0, 180.0);
+        assert!(short.open[3] >= 36.0);
+        assert_eq!(
+            short.buttons[3][1] + short.buttons[3][3],
+            short.map[1] + short.map[3]
+        );
     }
     #[test]
     fn old_profiles_keep_custom_layouts_and_new_preferences_have_safe_defaults() {

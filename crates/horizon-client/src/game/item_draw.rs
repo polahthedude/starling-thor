@@ -320,6 +320,31 @@ impl Game<'_> {
             self.glint_frame.alpha,
         );
     }
+    /// `stack`'s GUI model under `pose` (GUI space, the model's unit block 1 wide, y up), as
+    /// [`Self::draw_item_model`] draws it in a slot but centred: the middle of its model's
+    /// box (a slab's, a torch's, not its slot's) at the pose's origin, so turning it turns it
+    /// about itself.
+    pub(super) fn draw_item_posed(
+        &self,
+        batch: &mut HudBatch,
+        stack: &ItemStack,
+        pose: glam::Mat4,
+    ) {
+        let owner = self.player_owner(Some(stack));
+        let state = self.resolve_item(stack, DisplayContext::Gui, Some(&owner), 0);
+        let (lo, hi) = state.bounding_box();
+        item_render::gui::draw_posed(
+            &state,
+            &self.pack.item_renderer,
+            &self.gui.atlas.sprites,
+            &self.item_host(),
+            batch,
+            pose * glam::Mat4::from_translation(-(lo + hi) / 2.0),
+            self.glint_frame.millis / 1000.0,
+            self.glint_frame.speed,
+            self.glint_frame.alpha,
+        );
+    }
     /// The glint clock, options and sprite for this frame: read once per
     /// frame, not per item (`GameRenderer.extractOptions`).
     pub(super) fn capture_glint_frame(&self) -> item_render::GlintFrame {

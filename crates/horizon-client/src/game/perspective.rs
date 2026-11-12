@@ -37,6 +37,21 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+/// A player preview's pose beyond its turn (`draw_player_posed`): the dual screen's animated
+/// player.
+#[derive(Default)]
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(super) struct DollPose {
+    /// Up, in blocks.
+    pub lift: f32,
+    /// Degrees down, on top of the cursor's.
+    pub head_pitch: f32,
+    /// The main arm's swing, 0 (none) to 1.
+    pub swing: f32,
+    /// The hands hold the selected hotbar slot's and the off-hand slot's stacks.
+    pub hands: bool,
+}
+
 /// The skin a player preview without a world wears (an atlas sprite).
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub(super) fn set_preview_skin(skin: String, slim: bool) {
@@ -711,19 +726,35 @@ impl Game<'_> {
     pub(super) fn draw_player_turned(
         &self,
         batch: &mut HudBatch,
-        [x0, y0, x1, y1]: [f32; 4],
+        rect: [f32; 4],
         size: f32,
         offset_y: f32,
         yaw: Option<f32>,
     ) {
-        let mut m = match self.player_model.as_ref() {
+        self.draw_player_posed(batch, rect, size, offset_y, yaw, &DollPose::default());
+    }
+    /// [`Self::draw_player_turned`] in `pose`: lifted, the head tilted, the arm swinging, the
+    /// hands holding what the hotbar and the off-hand slot hold.
+    pub(super) fn draw_player_posed(
+        &self,
+        batch: &mut HudBatch,
+        [x0, y0, x1, y1]: [f32; 4],
+        size: f32,
+        offset_y: f32,
+        yaw: Option<f32>,
+        pose: &DollPose,
+    ) {
+        // At the title the last world's player (and what it wore and held) may still be
+        // loaded: only its skin is shown, on a fresh model.
+        let in_world = self.title.is_none();
+        let mut m = match self.player_model.as_ref().filter(|_| in_world) {
             Some(m) => {
                 if let Some(skin) = &m.skin {
                     LAST_SKIN.set(Some((skin.clone(), m.slim)));
                 }
                 m.clone()
             }
-            None if yaw.is_some() => {
+            None if yaw.is_some() || !in_world => {
                 let Some(kind) = self.res.player_type().clone() else {
                     return;
                 };
@@ -736,10 +767,11 @@ impl Game<'_> {
             }
             None => return,
         };
-        if self
-            .player
-            .as_ref()
-            .is_some_and(|p| p.health.dead_or_dying())
+        if in_world
+            && self
+                .player
+                .as_ref()
+                .is_some_and(|p| p.health.dead_or_dying())
         {
             return;
         }
@@ -760,8 +792,15 @@ impl Game<'_> {
         m.previous_body_yaw = m.body_yaw;
         m.head_yaw = m.body_yaw + x_angle * 20.0;
         m.previous_head_yaw = m.head_yaw;
-        m.head_pitch = -y_angle * 20.0;
+        m.head_pitch = -y_angle * 20.0 + pose.head_pitch;
         m.previous_head_pitch = m.head_pitch;
+        // The swing's progress, as `attackAnim` is at the frame drawn.
+        (m.anim.attack_anim, m.anim.attack_anim_o) = (pose.swing, pose.swing);
+        if pose.hands && in_world {
+            let held = |slot: usize| self.stack_in(slot).map(|s| s.item.clone());
+            m.extra.main_hand = held(self.selected);
+            m.extra.off_hand = held(super::shield::OFFHAND_SLOT);
+        }
         m.position.y += 0.125 * f64::from(u8::from(m.extra.crouching));
         m.previous = m.position;
         let camera = glam::DVec3::new(m.position.x, m.position.y, m.position.z);
@@ -775,6 +814,11 @@ impl Game<'_> {
         } else {
             horizon_client::mobs::render::render_layers
         };
+        let armor = if in_world {
+            self.player_armor_layers()
+        } else {
+            Vec::new()
+        };
         render(
             &m,
             1.0,
@@ -782,10 +826,13 @@ impl Game<'_> {
             &lookup,
             240 | 240 << 8,
             self.res.mob_data(),
-            &self.player_armor_layers(),
+            &armor,
             &mut verts,
         );
-        let chest = self.armor[1].as_ref().map(|s| &*s.item);
+        let chest = self.armor[1]
+            .as_ref()
+            .map(|s| &*s.item)
+            .filter(|_| in_world);
         if !self.own_invisible() {
             self.player_cape_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
         }
@@ -797,16 +844,22 @@ impl Game<'_> {
             240 | 240 << 8,
             &mut verts,
         );
-        self.player_elytra_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
-        self.shoulder_parrots_geometry(&m, camera, 1.0, 240 | 240 << 8, &mut verts);
-        self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
-        self.head_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
+        if in_world {
+            self.player_elytra_geometry(&m, chest, camera, 1.0, 240 | 240 << 8, &mut verts);
+            self.shoulder_parrots_geometry(&m, camera, 1.0, 240 | 240 << 8, &mut verts);
+            self.held_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
+            self.head_item_geometry(&m, camera, 1.0, 240 | 240 << 8, false, &mut verts);
+        }
         let height = if m.extra.crouching { 1.5 } else { 1.8 };
         // PictureInPictureRenderer: the box centre, (size, size, -size);
         // then the translation and Rz(pi) * Rx(y_angle * 20 degrees).
         let gui = glam::Mat4::from_translation(glam::Vec3::new(cx, cy, 0.0))
             * glam::Mat4::from_scale(glam::Vec3::new(size, size, -size))
-            * glam::Mat4::from_translation(glam::Vec3::new(0.0, height / 2.0 + offset_y, 0.0))
+            * glam::Mat4::from_translation(glam::Vec3::new(
+                0.0,
+                height / 2.0 + offset_y - pose.lift,
+                0.0,
+            ))
             * glam::Mat4::from_rotation_z(std::f32::consts::PI)
             * glam::Mat4::from_rotation_x((y_angle * 20.0).to_radians());
         let fire = self

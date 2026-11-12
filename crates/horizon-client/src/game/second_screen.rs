@@ -12,15 +12,21 @@ use horizon_client::{
 };
 use std::cell::{Cell, RefCell};
 
+mod ambience;
 mod container;
 mod creative;
 mod forms;
 mod menu;
 mod screens;
+mod showcase;
+mod sky;
 mod worlds;
 
-/// The hotbar's top edge: 1 pixel down, in the band's 24.
+/// The hotbar's top edge as laid out: 1 pixel down, in the band's 24.
 const HOTBAR_TOP: f32 = 1.0;
+/// How much lower than laid out the hotbar is drawn (and touched): the selected slot's frame,
+/// a pixel above the hotbar's top, then clears the screen's top edge.
+const HOTBAR_SHIFT: f32 = 1.0;
 
 /// Vanilla's container grey (`#C6C6C6`), as the touch screen's background.
 const BACKGROUND: wgpu::Color = wgpu::Color {
@@ -60,6 +66,8 @@ thread_local! {
     static DRAWING_LOWER: Cell<bool> = const { Cell::new(false) };
     /// The moved screen's tooltip this frame: shown on the window, off the buttons.
     static LOWER_TOOLTIP: RefCell<Vec<horizon_client::text::Text>> = const { RefCell::new(Vec::new()) };
+    /// The title panorama under this frame of the second screen (its yaw and pitch).
+    static PANORAMA: Cell<Option<[f32; 2]>> = const { Cell::new(None) };
 }
 
 /// The controller's pointer or focus is being drawn on the second screen (`draw_pad_cursor`).
@@ -88,7 +96,7 @@ fn lower_hotbar_slot(width: f32, band: f32, point: [f32; 2]) -> Option<usize> {
     let (scale, dx, _) = FIT.get();
     let unfit = [
         (point[0] - dx - width / 2.0) / scale + width / 2.0,
-        (point[1] - HOTBAR_TOP) / scale + HOTBAR_TOP,
+        (point[1] - HOTBAR_SHIFT - HOTBAR_TOP) / scale + HOTBAR_TOP,
     ];
     touch::hotbar_slot(width, band - 1.0, unfit)
 }
@@ -99,13 +107,40 @@ fn lower_hotbar_rect(width: f32, slot: usize) -> [f32; 4] {
     let (scale, dx, _) = FIT.get();
     let x = ((width as i32) / 2 - 91) as f32 + 1.0 + slot as f32 * 20.0;
     let fit_x = |x: f32| (x - width / 2.0) * scale + width / 2.0 + dx;
-    let fit_y = |y: f32| (y - HOTBAR_TOP) * scale + HOTBAR_TOP;
+    let fit_y = |y: f32| (y - HOTBAR_TOP) * scale + HOTBAR_TOP + HOTBAR_SHIFT;
     [
         fit_x(x),
         fit_y(HOTBAR_TOP + 1.0),
         20.0 * scale,
         20.0 * scale,
     ]
+}
+
+/// The second screen's frame: vanilla's container grey, its light top and left edges and
+/// darker bottom and right ones (2 pixels); what its layouts hold sits inside it, with dark
+/// text (`menu::TEXT`) as on vanilla's containers.
+fn draw_frame(batch: &mut HudBatch, atlas: &hud::HudAtlas, rect: [f32; 4]) {
+    menu::panel(batch, atlas, rect);
+}
+
+/// A chest's front, 14 by 15 centred in the 16-pixel square at `at`, from the chest's entity
+/// texture (the resource pack's, 64 square): the lid's front strip over the base's front, and
+/// the latch where the lid meets the base.
+fn draw_chest_face(batch: &mut HudBatch, atlas: &hud::HudAtlas, [x, y]: [f32; 2]) {
+    let Some(r) = atlas.sprites.get("entity/chest/normal").copied() else {
+        return;
+    };
+    // Texels of the 64-square texture: the part `[u, v, w, h]` drawn at `(dx, dy)`.
+    let part = |batch: &mut HudBatch, [u, v, w, h]: [f32; 4], dx: f32, dy: f32| {
+        let mut q = r;
+        let (du, dv) = ((r.u1 - r.u0) / 64.0, (r.v1 - r.v0) / 64.0);
+        (q.u0, q.u1) = (r.u0 + du * u, r.u0 + du * (u + w));
+        (q.v0, q.v1) = (r.v0 + dv * v, r.v0 + dv * (v + h));
+        batch.rect_uv(x + dx, y + dy, w, h, q, u32::MAX);
+    };
+    part(batch, [14.0, 14.0, 14.0, 5.0], 1.0, 0.0);
+    part(batch, [14.0, 33.0, 14.0, 10.0], 1.0, 5.0);
+    part(batch, [1.0, 1.0, 2.0, 4.0], 7.0, 3.0);
 }
 
 /// The touch id a finger on the second screen has among the window's: Android's are small.
@@ -121,6 +156,8 @@ pub(crate) fn release() {
             lower.failed = false;
         }
     });
+    touch::set_menu_elsewhere(false);
+    hud::set_dual_experience_elsewhere(false, false);
     // Nothing draws on the window now: Android may destroy it without waiting.
     closed();
 }
@@ -281,6 +318,9 @@ impl Game<'_> {
                 }
             });
         }
+        touch::set_menu_elsewhere(self.menu_on_lower());
+        // Back on the window unless the panel draws them this frame (`draw_panel_experience`).
+        hud::set_dual_experience_elsewhere(false, false);
         let hotbar = HOTBAR.replace(false);
         let touches = crate::second_screen::take_touches();
         let taps: Vec<[f32; 2]> = touches
@@ -329,7 +369,7 @@ impl Game<'_> {
             }
             self.draw_panel(&mut batch, &panel);
         }
-        self.present_lower(&batch, BACKGROUND);
+        self.present_lower(&mut batch, BACKGROUND);
     }
 
     /// While alive, a screen moved whole to the second screen (not one of its own layouts)
@@ -345,10 +385,17 @@ impl Game<'_> {
         let size = SCREEN
             .with_borrow(|s| s.as_ref()?.drawn.as_ref().map(|d| d.size()))
             .filter(|_| moved);
+        let beacon = self.remote_menu().1 == "minecraft:beacon"
+            || self
+                .station
+                .as_ref()
+                .is_some_and(|s| s.kind == super::stations::Kind::Beacon);
         let min = match self.screen {
             Screen::Advancements => [256, 170],
-            // Trading's 276 by 166 and the beacon's 230 by 219 windows, larger.
-            Screen::Inventory => [280, 222],
+            // The beacon's 230 by 219 window and trading's 276 by 166, with a little room:
+            // as large as each fits.
+            Screen::Inventory if beacon => [234, 223],
+            Screen::Inventory => [280, 170],
             _ => [320, 240],
         };
         hud::LayoutAs::new(window, size.map(|s| (s, min)))
@@ -390,8 +437,11 @@ impl Game<'_> {
         });
     }
 
-    /// Draw `batch` on the second screen over `clear`.
-    fn present_lower(&mut self, batch: &HudBatch, clear: wgpu::Color) {
+    /// Draw `batch` on the second screen over `clear`, or over the world's backdrop for the
+    /// panel's and the menus' grounds (`ambient_backdrop`).
+    fn present_lower(&mut self, batch: &mut HudBatch, clear: wgpu::Color) {
+        let clear = self.ambient_backdrop(batch, clear);
+        let batch = &*batch;
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
@@ -402,6 +452,7 @@ impl Game<'_> {
             let Some(drawn) = lower.drawn.as_mut() else {
                 return;
             };
+            drawn.panorama = PANORAMA.take();
             let drew =
                 horizon_client::crash::contain(|| renderer.draw_second_screen(drawn, batch, clear));
             if let Err(error) = drew {
@@ -480,7 +531,20 @@ impl Game<'_> {
                 self.update_remote_skins();
                 self.draw_options(batch);
             }
-            Screen::Dead => self.draw_death_screen(batch),
+            Screen::Dead => {
+                self.draw_death_screen(batch);
+                // A server's death message: the window's `remote_hud` draws it over vanilla's
+                // screen, but that screen is here.
+                if self.ui.death_text.is_none()
+                    && self.ui.death_confirm.is_none()
+                    && let Some(cause) = self.death_cause()
+                {
+                    let atlas = &self.gui.atlas;
+                    let cw = atlas.font.width_text(cause);
+                    let x = ((batch.width - cw) / 2.0).floor();
+                    batch.text_styled(atlas, cause, x, 85.0, u32::MAX, true);
+                }
+            }
             Screen::Stats => self.draw_stats(batch),
             Screen::Advancements => self.draw_advancements(batch),
             Screen::WorldOptions => self.draw_world_options(batch),
@@ -584,66 +648,112 @@ impl Game<'_> {
         } else {
             MENU_BACKGROUND
         };
-        self.present_lower(&batch, clear);
+        self.present_lower(&mut batch, clear);
     }
 
     fn second_screen_tap(&mut self, panel: &touch::DualPanel, point: [f32; 2]) {
         // A hotbar slot is selected, as on the window's touch controls; the next tick tells
         // the server (SetCarriedItem).
-        if let Some(slot) = lower_hotbar_slot(panel.coords[2], panel.band, point) {
-            if !self.spectator() {
+        if let Some(slot) = lower_hotbar_slot(panel.sky[2], panel.band, point) {
+            if !self.spectator() && self.selected != slot {
                 self.selected = slot;
+                self.android_touch_haptic(8);
             }
             return;
         }
         let inventory = "action:key.inventory";
-        match touch::rect_at(&panel.buttons, point) {
+        let Some(button) = touch::rect_at(&panel.buttons, point) else {
+            return;
+        };
+        self.audio.play_button_click();
+        self.android_touch_haptic(12);
+        match button {
             // The inventory (the 3DS's X button), or crafting (Y): one screen, its tabs.
-            Some(button @ (0 | 1)) => {
+            0 | 1 => {
                 menu::open_on(if button == 0 { None } else { Some(0) });
                 if self.screen != Screen::Inventory {
                     self.android_dispatch_custom_token(inventory, true);
                     self.android_dispatch_custom_token(inventory, false);
                 }
             }
+            // Chat, typed on the window with the keyboard up, as the touch controls' chat.
+            2 => {
+                if let Err(error) = self.key_pressed(winit::keyboard::KeyCode::KeyT) {
+                    log::warn!("Second screen chat: {error}");
+                }
+                self.android_show_keyboard();
+            }
             // Pause, as the touch controls' Escape: the menu, or back out of a screen.
-            Some(_) => {
+            _ => {
                 if let Err(error) = self.pad_back() {
                     log::warn!("Second screen: {error}");
                 }
             }
-            None => {}
         }
     }
 
+    /// The panel: the sky under everything, the hotbar over its top, and the frame holding
+    /// the map, the buttons and the coordinates and biome.
     fn draw_panel(&mut self, batch: &mut HudBatch, panel: &touch::DualPanel) {
-        let w = batch.width;
-        self.draw_lower_hotbar(batch, panel.band);
-        let atlas = &self.gui.atlas;
-        // The block the player stands in.
-        let [x, y, sw, sh] = panel.coords;
-        batch.fill(atlas, x, y, sw, sh, rgba(55, 55, 55, 255));
-        if let Some(p) = &self.player {
-            let at = [p.position.x, p.position.y, p.position.z].map(|v| v.floor() as i64);
-            let text = format!("X: {}, Y: {}, Z: {}", at[0], at[1], at[2]);
-            let tw = HudBatch::text_width(atlas, &text);
-            batch.text(
-                atlas,
-                &text,
-                ((w - tw) / 2.0).floor(),
-                y + 2.0,
-                u32::MAX,
-                false,
-            );
-        }
+        self.draw_panel_sky(batch, panel.sky, panel.open, true);
+        self.draw_lower_hotbar_over(batch, panel.band, false);
+        self.draw_panel_experience(batch, panel.band);
+        draw_frame(batch, &self.gui.atlas, panel.frame);
         self.draw_panel_buttons(batch, panel);
+        self.draw_panel_info(batch, panel.info);
+    }
+
+    /// The experience bar just under the hotbar and the level number under it, as the window's
+    /// HUD has them (`Hud.nextContextualInfoState`): the bar when the experience bar is the
+    /// contextual bar (no jump bar or locator bar in its place; not in creative or spectator),
+    /// the number whenever the player has experience and a level. The window leaves off what
+    /// is drawn here (`set_dual_experience_elsewhere`).
+    fn draw_panel_experience(&mut self, batch: &mut HudBatch, band: f32) {
+        use horizon_client::{hud_layout, locator_bar::ContextualBar};
+        let spectator = self.spectator();
+        let has_experience = !self.creative && !spectator && self.player.is_some();
+        let contextual = ContextualBar::next(
+            self.waypoints.has_waypoints(),
+            !spectator && self.jumpable_mount(),
+            self.mount_jumping(),
+            has_experience,
+            self.experience_recent(),
+        );
+        let bar = has_experience && contextual == ContextualBar::Experience;
+        let number = has_experience && self.experience.level > 0;
+        let wi = batch.width as i32;
+        let atlas = &self.gui.atlas;
+        let width = |s: &str| HudBatch::text_width(atlas, s) as i32;
+        // `experience` places the bar 29 above the height it is given, the number 35. The
+        // hotbar and its selected slot's frame end `HOTBAR_SHIFT` above the band's foot: the
+        // bar 1 under them, the number 2 under the bar (its outline 1 more each way).
+        let top = band as i32 + HOTBAR_SHIFT as i32;
+        if bar {
+            let progress = self.experience.progress;
+            let draws = hud_layout::experience(wi, top + 29, progress, 0, true, &width);
+            hud_layout::paint(batch, atlas, &draws);
+        }
+        if number {
+            let level = self.experience.level;
+            let draws = hud_layout::experience(wi, top + 42, 0.0, level, false, &width);
+            hud_layout::paint(batch, atlas, &draws);
+        }
+        hud::set_dual_experience_elsewhere(bar, number);
     }
 
     /// The hotbar along the top, on a dark band `band` tall (`hotbar_with_attack_side` places
     /// it 22 pixels from the bottom of the height it is given).
     fn draw_lower_hotbar(&mut self, batch: &mut HudBatch, band: f32) {
+        self.draw_lower_hotbar_over(batch, band, true);
+    }
+
+    /// [`Self::draw_lower_hotbar`], on its dark band or (`band_ground` false) over whatever
+    /// is under it (the panel's sky).
+    fn draw_lower_hotbar_over(&mut self, batch: &mut HudBatch, band: f32, band_ground: bool) {
         let w = batch.width;
-        batch.fill(&self.gui.atlas, 0.0, 0.0, w, band, rgba(85, 85, 85, 255));
+        if band_ground {
+            batch.fill(&self.gui.atlas, 0.0, 0.0, w, band, rgba(85, 85, 85, 255));
+        }
         let full = batch.height;
         batch.height = band - 1.0;
         let start = batch.vertices.len();
@@ -663,7 +773,8 @@ impl Game<'_> {
             let k = last.map_or(1.0, |t| 1.0 - (-12.0 * (now - t).as_secs_f32()).exp());
             let (scale, dx) = (scale + (target.0 - scale) * k, dx + (target.1 - dx) * k);
             FIT.set((scale, dx, Some(now)));
-            hud::transform_since(batch, start, [w / 2.0, HOTBAR_TOP], scale, [dx, 0.0]);
+            let offset = [dx, HOTBAR_SHIFT];
+            hud::transform_since(batch, start, [w / 2.0, HOTBAR_TOP], scale, offset);
         }
     }
 
@@ -684,13 +795,33 @@ impl Game<'_> {
             );
             let (cx, cy) = ((x + bw / 2.0).floor(), (y + bh / 2.0).floor());
             match i {
+                // The block's face at the left, inside the button's 3-pixel border, 1:1; the
+                // short label centred in the rest, short of the right border.
                 0 | 1 => {
-                    let icon = if i == 0 {
-                        "minecraft:chest"
-                    } else {
-                        "minecraft:crafting_table"
-                    };
-                    let stack = ItemStack::new(icon, 1);
+                    const EDGE: f32 = 3.0;
+                    let face = [x + EDGE, cy - 8.0];
+                    if i == 0 {
+                        draw_chest_face(batch, &self.gui.atlas, face);
+                    } else if let Some(r) = self
+                        .gui
+                        .atlas
+                        .sprites
+                        .get("block/crafting_table_top")
+                        .copied()
+                    {
+                        batch.rect_uv(face[0], face[1], 16.0, 16.0, r, u32::MAX);
+                    }
+                    let label = if i == 0 { "Bag" } else { "Craft" };
+                    let (from, to) = (face[0] + 16.0 + 2.0, x + bw - EDGE);
+                    let start = batch.vertices.len();
+                    let at = [from, cy - 4.0, to - from];
+                    menu::centered(batch, &self.gui.atlas, label, at, u32::MAX, true);
+                    // A label a pixel wider than its room may use the pixel either side, never
+                    // the face or the border's outer 2.
+                    batch.clip_since(start, face[0] + 17.0, y, x + bw - 2.0, y + bh);
+                }
+                2 => {
+                    let stack = ItemStack::new("minecraft:writable_book", 1);
                     self.draw_item(batch, &stack, cx - 8.0, cy - 8.0);
                 }
                 // Pause: two bars.

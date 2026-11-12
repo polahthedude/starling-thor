@@ -26,6 +26,16 @@ const TAB_ICONS: [&str; 7] = [
 ];
 
 pub(super) const TEXT: u32 = 0xFF40_4040;
+/// Text on the frame: vanilla's container text, dark, without a shadow.
+pub(super) const ON_FRAME: u32 = TEXT;
+
+/// The inventory tab's slots: the hotbar's size and pitch.
+const INV_SLOT: f32 = dual_menu::INVENTORY_SLOT;
+
+/// Where a screen's contents start under the hotbar band `band`: inside the frame.
+pub(super) fn content_top(band: f32) -> f32 {
+    band + dual_menu::CONTENT
+}
 const PANEL: u32 = 0xFFC6_C6C6;
 const DARK: u32 = 0xFF37_3737;
 const SHADE: u32 = 0xFF55_5555;
@@ -117,8 +127,66 @@ pub(super) fn closed() {
     });
 }
 
-/// Vanilla's slot: dark top and left edges, light bottom and right ones.
+/// Vanilla's container texture the frames and slots are cut from: the resource pack's, so they
+/// look as its chests do. Every pack keeps its layout (176 by 222 of a 256 square, scaled for
+/// a higher resolution), which vanilla's own chest screen relies on.
+const CONTAINER: &str = "gui/container/generic_54";
+
+/// Texels `[sx, sy, sw, sh]` of `CONTAINER` (in its 256-square layout) drawn over `dst`.
+fn container_part(batch: &mut HudBatch, atlas: &HudAtlas, src: [f32; 4], dst: [f32; 4]) -> bool {
+    let Some(r) = atlas.sprites.get(CONTAINER).copied() else {
+        return false;
+    };
+    let [dx, dy, dw, dh] = dst;
+    if dw <= 0.0 || dh <= 0.0 {
+        return true;
+    }
+    let [sx, sy, sw, sh] = src;
+    let (du, dv) = ((r.u1 - r.u0) / 256.0, (r.v1 - r.v0) / 256.0);
+    let mut q = r;
+    (q.u0, q.u1) = (r.u0 + du * sx, r.u0 + du * (sx + sw));
+    (q.v0, q.v1) = (r.v0 + dv * sy, r.v0 + dv * (sy + sh));
+    batch.rect_uv(dx, dy, dw, dh, q, u32::MAX);
+    true
+}
+
+/// `CONTAINER`'s columns and rows `cols`/`rows` (each its start and size in the texture)
+/// nine-sliced over `dst`: the corners kept, the edges and middle stretched, the borders
+/// `border` pixels (less on a smaller `dst`). False without the texture.
+fn container_slices(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    cols: [[f32; 2]; 3],
+    rows: [[f32; 2]; 3],
+    border: f32,
+    [x, y, w, h]: [f32; 4],
+) -> bool {
+    if !atlas.sprites.contains_key(CONTAINER) {
+        return false;
+    }
+    let bx = border.min((w / 2.0).floor());
+    let by = border.min((h / 2.0).floor());
+    let across = [[x, bx], [x + bx, w - 2.0 * bx], [x + w - bx, bx]];
+    let down = [[y, by], [y + by, h - 2.0 * by], [y + h - by, by]];
+    for (row, [ty, th]) in rows.iter().zip(down) {
+        for (col, [tx, tw]) in cols.iter().zip(across) {
+            let src = [col[0], row[0], col[1], row[1]];
+            container_part(batch, atlas, src, [tx, ty, tw, th]);
+        }
+    }
+    true
+}
+
+/// Vanilla's slot, from the pack's chest texture (its first slot, 1-pixel edges): dark top and
+/// left edges, light bottom and right ones.
 pub(super) fn slot_frame(batch: &mut HudBatch, atlas: &HudAtlas, r: [f32; 4]) {
+    let (cols, rows) = (
+        [[7.0, 1.0], [8.0, 16.0], [24.0, 1.0]],
+        [[17.0, 1.0], [18.0, 16.0], [34.0, 1.0]],
+    );
+    if container_slices(batch, atlas, cols, rows, 1.0, r) {
+        return;
+    }
     let [x, y, w, h] = r;
     batch.fill(atlas, x, y, w - 1.0, 1.0, DARK);
     batch.fill(atlas, x, y, 1.0, h - 1.0, DARK);
@@ -127,8 +195,16 @@ pub(super) fn slot_frame(batch: &mut HudBatch, atlas: &HudAtlas, r: [f32; 4]) {
     batch.fill(atlas, x + 1.0, y + 1.0, w - 2.0, h - 2.0, SLOT_FACE);
 }
 
-/// Vanilla's container panel: light top and left edges, dark bottom and right ones.
+/// Vanilla's container panel, from the pack's chest texture: its rounded 4-pixel border (the
+/// top from its top edge, the bottom from its bottom one) around the plain grey under its title.
 pub(super) fn panel(batch: &mut HudBatch, atlas: &HudAtlas, r: [f32; 4]) {
+    let (cols, rows) = (
+        [[0.0, 4.0], [4.0, 168.0], [172.0, 4.0]],
+        [[0.0, 4.0], [4.0, 12.0], [218.0, 4.0]],
+    );
+    if container_slices(batch, atlas, cols, rows, 4.0, r) {
+        return;
+    }
     let [x, y, w, h] = r;
     batch.fill(atlas, x, y, w, h, PANEL);
     batch.fill(atlas, x, y, w - 2.0, 2.0, u32::MAX);
@@ -175,12 +251,11 @@ pub(super) fn hotbar_shoulder(
     true
 }
 
-/// Two-pixel yellow highlight around a slot, as Legacy Console Edition's: drawn after the
-/// slots beside it, which would cover its outer line.
+/// Two-pixel white highlight around a slot, the lower screen's focus colour (vanilla's
+/// highlighted button's): drawn after the slots beside it, which would cover its outer line.
 pub(super) fn highlight(batch: &mut HudBatch, atlas: &HudAtlas, [x, y, w, h]: [f32; 4]) {
-    const YELLOW: u32 = 0xFF3F_E0FF;
-    outline(batch, atlas, [x, y, w, h], YELLOW);
-    outline(batch, atlas, [x + 1.0, y + 1.0, w - 2.0, h - 2.0], YELLOW);
+    outline(batch, atlas, [x, y, w, h], u32::MAX);
+    outline(batch, atlas, [x + 1.0, y + 1.0, w - 2.0, h - 2.0], u32::MAX);
     batch.fill(atlas, x + 1.0, y + 1.0, w - 2.0, h - 2.0, 0x50FF_FFFF);
 }
 
@@ -228,6 +303,7 @@ impl Game<'_> {
             ..Drag::NONE
         };
         if let Some(slot) = slot {
+            self.android_touch_haptic(6);
             let empty = self.carried.is_none();
             click(self, slot);
             if empty && self.carried.is_some() {
@@ -288,9 +364,9 @@ impl Game<'_> {
     /// The inventory tab's slot (or the hotbar's) at `p`.
     pub(super) fn legacy_slot_at(w: f32, band: f32, p: [f32; 2]) -> Option<usize> {
         lower_hotbar_slot(w, band, p).or_else(|| {
-            dual_menu::inventory(w, band)
+            dual_menu::inventory(w, content_top(band))
                 .into_iter()
-                .find(|&(_, [x, y])| inside([x, y, dual_menu::SLOT, dual_menu::SLOT], p))
+                .find(|&(_, [x, y])| inside([x, y, INV_SLOT, INV_SLOT], p))
                 .map(|(slot, _)| slot)
         })
     }
@@ -339,20 +415,20 @@ impl Game<'_> {
             }
         }
         self.slot_hold(Self::legacy_click, Self::legacy_right_click);
-        self.draw_lower_hotbar(&mut batch, band);
+        self.draw_menu_ground(&mut batch, band, TAB_ICONS.len());
         let tab = LEGACY.with_borrow(|l| l.tab);
         match tab {
             None => self.draw_legacy_inventory(&mut batch, band),
             Some(t) => self.draw_legacy_crafting(&mut batch, band, t),
         }
         let icons: Vec<&str> = TAB_ICONS.to_vec();
-        self.draw_lower_tabs(&mut batch, &icons, tab);
+        self.draw_lower_tabs(&mut batch, &icons, tab, 0.0);
         // The carried stack, where the last tap was.
         if let Some(stack) = self.carried.clone() {
             let [x, y] = LEGACY.with_borrow(|l| l.at);
             self.draw_item(&mut batch, &stack, x - 8.0, y - 8.0);
         }
-        self.present_lower(&batch, BACKGROUND);
+        self.present_lower(&mut batch, BACKGROUND);
     }
 
     /// A placed craft's result, shift-clicked into the inventory once the grid shows it (at
@@ -457,6 +533,9 @@ impl Game<'_> {
             touch::rect_at(&categories, p).map(Some)
         };
         if let Some(chosen) = chosen {
+            if chosen != tab {
+                self.android_touch_haptic(8);
+            }
             LEGACY.with_borrow_mut(|l| (l.tab, l.group, l.variant) = (chosen, 0, 0));
             return;
         }
@@ -510,7 +589,7 @@ impl Game<'_> {
         let (group, variant) = Self::legacy_selection(&groups);
         let visible = dual_menu::carousel_fits(w).min(groups.len());
         let first = dual_menu::window(group, groups.len(), visible);
-        let row = dual_menu::carousel(w, band, visible, group - first);
+        let row = dual_menu::carousel(w, content_top(band), visible, group - first);
         let variants = groups[group].len();
         let set = |g: usize, v: usize| LEGACY.with_borrow_mut(|l| (l.group, l.variant) = (g, v));
         if inside(row.left, p) {
@@ -528,7 +607,10 @@ impl Game<'_> {
             } else {
                 set(first + i, 0);
             }
+        } else {
+            return;
         }
+        self.android_touch_haptic(8);
     }
 
     fn legacy_craft(&mut self, (entry, craftable): (usize, bool)) {
@@ -547,11 +629,11 @@ impl Game<'_> {
         let (active, (row, col)) = LEGACY.with_borrow(|l| (l.pad_active, l.pad));
         let marked = active.then(|| {
             let slot = pad_rows()[row][col];
-            let rect = match dual_menu::inventory(batch.width, band)
+            let rect = match dual_menu::inventory(batch.width, content_top(band))
                 .into_iter()
                 .find(|s| s.0 == slot)
             {
-                Some((_, [x, y])) => [x, y, dual_menu::SLOT, dual_menu::SLOT],
+                Some((_, [x, y])) => [x, y, INV_SLOT, INV_SLOT],
                 None => lower_hotbar_rect(batch.width, slot),
             };
             let at = [rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0];
@@ -567,45 +649,63 @@ impl Game<'_> {
     fn draw_legacy_slots(&mut self, batch: &mut HudBatch, band: f32) {
         // The player in its black box beside the armor, turned a little, as the console
         // editions' inventory shows it.
-        let [dx, dy, dw, dh] = dual_menu::inventory_doll(batch.width, band);
+        let [dx, dy, dw, dh] = dual_menu::inventory_doll(batch.width, content_top(band));
         slot_frame(batch, &self.gui.atlas, [dx, dy, dw, dh]);
         let atlas = &self.gui.atlas;
         batch.fill(atlas, dx + 1.0, dy + 1.0, dw - 2.0, dh - 2.0, 0xFF00_0000);
         let doll = [dx + 1.0, dy + 2.0, dx + dw - 1.0, dy + dh - 2.0];
         self.draw_player_turned(batch, doll, (dh / 2.4).floor(), 0.0625, Some(20.0));
-        for (slot, [x, y]) in dual_menu::inventory(batch.width, band) {
-            slot_frame(
-                batch,
-                &self.gui.atlas,
-                [x, y, dual_menu::SLOT, dual_menu::SLOT],
-            );
+        // Items centred in their 20-pixel slots, as the hotbar's.
+        let inset = ((INV_SLOT - 16.0) / 2.0).floor();
+        for (slot, [x, y]) in dual_menu::inventory(batch.width, content_top(band)) {
+            slot_frame(batch, &self.gui.atlas, [x, y, INV_SLOT, INV_SLOT]);
+            let (ix, iy) = (x + inset, y + inset);
             match self.slot_mut(slot).clone() {
-                Some(stack) => self.draw_item(batch, &stack, x + 1.0, y + 1.0),
+                Some(stack) => self.draw_item(batch, &stack, ix, iy),
                 None => {
                     if let Some(icon) = empty_icon(slot) {
-                        batch.sprite(&self.gui.atlas, icon, x + 1.0, y + 1.0);
+                        batch.sprite(&self.gui.atlas, icon, ix, iy);
                     }
                 }
             }
         }
     }
 
-    /// The tab bar: `icons`' tabs from the left (`chosen`, Some), the inventory's at the right
-    /// end (`chosen` None).
+    /// The tab bar over the sky: `icons`' tabs from the left (`chosen`, Some), moved `scroll`
+    /// to the left and cut to their part of the bar, the inventory's at the right end
+    /// (`chosen` None).
     pub(super) fn draw_lower_tabs(
         &mut self,
         batch: &mut HudBatch,
         icons: &[&str],
         chosen: Option<usize>,
+        scroll: f32,
     ) {
-        let (categories, inventory) = dual_menu::tabs(batch.width, batch.height, icons.len());
-        let [_, y, _, h] = inventory;
-        let w = batch.width;
-        batch.fill(&self.gui.atlas, 0.0, y - 2.0, w, h + 4.0, SHADE);
+        let (w, h) = (batch.width, batch.height);
+        let (categories, inventory, view) = dual_menu::tabs_scrolled(w, h, icons.len(), scroll);
+        let start = batch.vertices.len();
         for (i, rect) in categories.into_iter().enumerate() {
-            self.lower_tab(batch, rect, chosen == Some(i), icons[i]);
+            if rect[0] + rect[2] > view[0] && rect[0] < view[0] + view[2] {
+                self.lower_tab(batch, rect, chosen == Some(i), icons[i]);
+            }
         }
+        // The chosen tab rises 3 into the frame's gap.
+        let [vx, vy, vw, vh] = view;
+        batch.clip_since(start, vx, vy - 3.0, vx + vw, vy + vh);
         self.lower_tab(batch, inventory, chosen.is_none(), "minecraft:chest");
+    }
+
+    /// What the inventory, crafting and creative screens stand on: the world's sky (the
+    /// panel's), the hotbar over its top, and the frame from under it to the tab bar of
+    /// `tabs` tabs.
+    pub(super) fn draw_menu_ground(&mut self, batch: &mut HudBatch, band: f32, tabs: usize) {
+        let (w, h) = (batch.width, batch.height);
+        let sky = [0.0, 0.0, w, h];
+        self.draw_panel_sky(batch, sky, [0.0, band, w, h - band], true);
+        self.draw_lower_hotbar_over(batch, band, false);
+        let (_, _, view) = dual_menu::tabs_scrolled(w, h, tabs, 0.0);
+        let frame = dual_menu::content_frame(w, band, view[1] - 2.0);
+        super::draw_frame(batch, &self.gui.atlas, frame);
     }
 
     /// A tab, as Legacy Console Edition's: the chosen one in the panel's grey and raised to
@@ -633,7 +733,7 @@ impl Game<'_> {
         let visible = dual_menu::carousel_fits(w).min(groups.len());
         let (group, variant) = Self::legacy_selection(&groups);
         let first = dual_menu::window(group, groups.len(), visible);
-        let row = dual_menu::carousel(w, band, visible, group - first);
+        let row = dual_menu::carousel(w, content_top(band), visible, group - first);
         let atlas = &self.gui.atlas;
         let [hx, hy, hw, _] = row.header;
         centered(
@@ -641,12 +741,12 @@ impl Game<'_> {
             atlas,
             dual_menu::LEGACY_TABS[t],
             [hx, hy, hw],
-            TEXT,
+            ON_FRAME,
             false,
         );
         let Some(&(selected, _)) = groups.get(group).and_then(|g| g.get(variant)) else {
             let at = [hx, hy + 30.0, hw];
-            centered(batch, atlas, "No recipes yet", at, TEXT, false);
+            centered(batch, atlas, "No recipes yet", at, ON_FRAME, false);
             return;
         };
         // How many of the selected result the player holds, at the right: "3 x [item]".
@@ -660,7 +760,7 @@ impl Game<'_> {
                 .sum();
             let text = format!("{held} x");
             let tw = HudBatch::text_width(atlas, &text);
-            batch.text(atlas, &text, hx + hw - 18.0 - tw, hy, TEXT, false);
+            batch.text(atlas, &text, hx + hw - 18.0 - tw, hy, ON_FRAME, false);
             let icon = ItemStack::new(&result.item, 1);
             self.draw_item(batch, &icon, hx + hw - 16.0, hy - 4.0);
         }
@@ -699,10 +799,10 @@ impl Game<'_> {
         // Arrows where groups are out of sight.
         let atlas = &self.gui.atlas;
         if first > 0 {
-            arrow(batch, atlas, row.left, b'<', DARK);
+            arrow(batch, atlas, row.left, b'<', ON_FRAME);
         }
         if first + visible < groups.len() {
-            arrow(batch, atlas, row.right, b'>', DARK);
+            arrow(batch, atlas, row.right, b'>', ON_FRAME);
         }
     }
 
@@ -732,11 +832,12 @@ impl Game<'_> {
         if !self.screen_on_second_screen() {
             return;
         }
-        // The world under the inventory and creative screens: darkened (and blurred, by
-        // `menu_blur`), so what is drawn over it stands out.
+        // The world under the inventory and creative screens (blurred, by `menu_blur`): clear
+        // at the top, darkening to near black at the bottom, where the text is.
         if matches!(self.screen, Screen::Inventory | Screen::Creative) {
             let (w, h) = (batch.width, batch.height);
-            batch.fill(&self.gui.atlas, 0.0, 0.0, w, h, 0x8C00_0000);
+            let top = (h * 0.15).floor();
+            batch.fill_gradient(&self.gui.atlas, (0.0, top, w, h - top), 0, 0xE000_0000);
         }
         if self.screen == Screen::Creative {
             return self.draw_creative_upper(batch);
@@ -762,25 +863,28 @@ impl Game<'_> {
         }
     }
 
+    /// The player over the world, and along the bottom the tapped item's name under
+    /// "Inventory" (or that alone) and the controls.
     fn draw_upper_inventory(&mut self, batch: &mut HudBatch) {
         let (w, h) = (batch.width, batch.height);
-        let (pw, ph) = (120.0, 112.0);
-        let (x, y) = (((w - pw) / 2.0).floor(), ((h - ph) / 2.0).floor());
-        batch.fill(&self.gui.atlas, x, y, pw, ph, 0x9600_0000);
-        self.draw_player_preview(batch, x + 35.0, y + 4.0, x + 85.0, y + 80.0, 32.0, 0.0625);
-        let atlas = &self.gui.atlas;
+        // Its middle where the other screens' item is.
+        self.draw_showcase_player(batch, [(w / 2.0).floor(), (h * 0.40).floor()]);
         let title = self.translate("container.inventory", "Inventory");
-        centered(batch, atlas, &title, [x, y + 86.0, pw], u32::MAX, true);
         let focused = LEGACY.with_borrow(|l| l.focus);
         let stack = self
             .carried
             .clone()
             .or_else(|| focused.and_then(|slot| self.slot_mut(slot).clone()));
-        if let Some(stack) = stack {
-            let name = item_tooltip::name_line(&stack, &|key| self.pack.names.display_get(key));
-            let atlas = &self.gui.atlas;
-            centered(batch, atlas, &name, [x, y + 99.0, pw], 0xFFAA_AAAA, true);
-        }
+        let name =
+            stack.map(|s| item_tooltip::name_line(&s, &|key| self.pack.names.display_get(key)));
+        let (heading, name) = match &name {
+            Some(name) => (Some(title.as_str()), name.as_str()),
+            None => (None, title.as_str()),
+        };
+        let hint = self.pad_hint(
+            "{south} Take All    {north} Take Half    {west} Quick Move    {lt}/{rt} Tab    {lb}/{rb} Hotbar",
+        );
+        self.draw_upper_caption(batch, heading, Some(name), &hint);
     }
 
     /// Legacy Console Edition's crafting panels, on the window: the selected recipe (its name,

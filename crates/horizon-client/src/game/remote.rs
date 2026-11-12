@@ -9041,8 +9041,10 @@ impl Game<'_> {
         let w = batch.width;
         if self.screen == Screen::Dead
             && let Some(message) = &r.death_message
+            && !self.screen_on_second_screen()
         {
-            // DeathScreen draws the styled cause component.
+            // DeathScreen draws the styled cause component (on a dual screen, the death
+            // screens there draw it: `death_cause`).
             let tw = atlas.font.width_text(message);
             batch.text_styled(
                 atlas,
@@ -9053,6 +9055,15 @@ impl Game<'_> {
                 true,
             );
         }
+    }
+    /// The death screen's cause: the message the game made (in-frame) or the server sent
+    /// (`ClientboundPlayerCombatKill`).
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(super) fn death_cause(&self) -> Option<&horizon_client::text::Text> {
+        self.ui
+            .death_text
+            .as_ref()
+            .or_else(|| self.remote.as_ref()?.death_message.as_ref())
     }
     /// Shared flag 6 of an entity on a server's client (`None` without a server).
     pub(super) fn remote_glowing(&self, id: u32) -> Option<bool> {
