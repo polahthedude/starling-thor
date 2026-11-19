@@ -63,7 +63,14 @@ def download_game(version, directory):
     # and client/server jar hashes are checked against the engine pins below.
     versions = directory / 'versions' / version
     manifest_path = versions / f'{version}.json'
-    lab.download(entry['url'], manifest_path, entry['sha1'])
+    accepted = {pins['manifest_sha1'], *pins.get('accepted_manifest_sha1', [])}
+    if entry['sha1'] in accepted:
+        lab.download(entry['url'], manifest_path, entry['sha1'])
+    else:
+        # Mojang republished the version JSON after the pin: fetch the pinned one by hash instead.
+        pinned = pins['manifest_sha1']
+        print(f"Catalog lists an unpinned {version} manifest ({entry['sha1']}); using the pinned {pinned}", flush=True)
+        lab.download(f'https://piston-meta.mojang.com/v1/packages/{pinned}/{version}.json', manifest_path, pinned)
     manifest = json.loads(manifest_path.read_text())
     files = []
     for side in ['client', 'server']:
