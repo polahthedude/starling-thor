@@ -1,42 +1,34 @@
-# Dual-screen handhelds (Starling Thor)
+# Dual-screen handhelds
 
-This fork draws a second interface on the other display of dual-screen Android
-handhelds such as the AYN Thor. Single-screen devices are unaffected: the lower
-screen only exists while Android gives the app a second display surface.
+Starling Thor draws a second interface on the other display of devices like the AYN Thor. If
+Android doesn't hand the app a second display, none of this runs and the game is the same as
+upstream.
 
-## Layout
+## Bottom screen
 
-The lower screen follows New 3DS Edition's touch screen, in vanilla's sprites:
-
-- hotbar along the top, coordinates beneath it;
-- the minimap at the left;
-- a 3x3 button grid at the right: inventory, pause, chat, advancements, camera.
-
-The main display keeps the world and the status bars.
+Laid out like the New 3DS edition, using vanilla's sprites: hotbar and coordinates along the top,
+minimap on the left, and a 3x3 grid on the right (inventory, pause, chat, advancements, camera).
+The top screen keeps the world and the status bars.
 
 ## Menus
 
-Vanilla's own screens are drawn on the lower screen, fitted in quarter-size
-steps: inventory, crafting with the recipe book (hover shows the recipe in a
-showcase), creative inventory (swipe scrolling with momentum, search with an
-on-screen keyboard), anvil, pause menu and the world screens. Item tooltips
-appear beside the showcase. Hardware pad input drives the recipe book. The
-3DS-style creative layout stays behind `VANILLA_CREATIVE`.
+Inventory, crafting with the recipe book, the creative inventory, anvil, pause and the world
+screens are vanilla's own, scaled to fit the bottom screen in quarter steps. Hovering a recipe
+shows it in a larger preview, and item tooltips show up next to it. The creative grid scrolls by
+swiping and has a search keyboard. A hardware pad can drive the recipe book. The older 3DS-style
+creative layout is still in the code behind `VANILLA_CREATIVE`.
 
 ## Launching
 
-`LaunchActivity` starts the game on the main display whichever display the
-launcher icon or a shortcut was opened from. The game activity is `singleTask`,
-so a second launch brings the running game back. A control profile can be pinned
-as a home-screen shortcut that starts the game directly.
+`LaunchActivity` starts the game on the top screen no matter which display you tapped the icon
+on. The game activity is `singleTask`, so launching again returns to the running game. You can
+also pin a control profile as a home-screen shortcut.
 
-## Source
+## Code
 
-`crates/horizon-client/src/game/second_screen.rs` and `second_screen/`;
-the surface comes from `android/second_screen.rs`;
-the Java side is `packaging/android/java/dev/horizon/android/`.
+`crates/horizon-client/src/game/second_screen.rs` and `second_screen/`, with the surface coming
+from `android/second_screen.rs`. The Java side is in `packaging/android/java/dev/horizon/android/`.
 
 ## Status
 
-Developed on and for the AYN Thor. Other dual-screen devices are untested.
-Builds are experimental; see [dev builds](android-dev-builds.md).
+Only tried on the AYN Thor. Builds are experimental, see [dev builds](android-dev-builds.md).

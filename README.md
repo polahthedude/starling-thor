@@ -1,11 +1,10 @@
 # Starling Thor
 
-> [!NOTE]
-> **Starling Thor is a fork of [Horizon Android](https://github.com/Vasysik/horizon-android)** (now merging into
-> [Starling](https://github.com/JuanLuci/starling)), itself an Android port of
-> [Horizon](https://github.com/ludovic111/horizon). It adds first-class support for **dual-screen handhelds
-> such as the AYN Thor**. Everything else is inherited; see [What this fork changes](#what-this-fork-changes).
-> Unofficial; not affiliated with the upstream projects, Mojang or Microsoft.
+A fork of [Horizon Android](https://github.com/Vasysik/horizon-android) that makes the AYN Thor's
+second screen actually useful. Horizon Android is an Android port of
+[Horizon](https://github.com/ludovic111/horizon), and is merging into
+[Starling](https://github.com/JuanLuci/starling). Everything outside the second screen is theirs.
+Unofficial, and not affiliated with Mojang or Microsoft.
 
 A native Android port of [Horizon](https://github.com/ludovic111/horizon), the
 Rust engine for Minecraft Java 26.3. Unofficial and in active development.
@@ -18,18 +17,25 @@ Rust engine for Minecraft Java 26.3. Unofficial and in active development.
 
 ## What this fork changes
 
-| Area | Upstream Horizon Android | Starling Thor |
-| --- | --- | --- |
-| Second display | Unused; the game runs on one screen | The other display becomes a touch screen laid out after New 3DS Edition: hotbar and coordinates on top, a map, and a 3x3 grid of buttons (inventory, pause, chat, advancements, camera). The main display keeps the world and status bars |
-| Menus on the lower screen | None | Vanilla's own screens drawn there: inventory, crafting with the recipe book, creative inventory (swipe scrolling with momentum, search with an on-screen keyboard), anvil, pause menu and the world screens, plus item tooltips and a hover showcase |
-| Launch | Starts on whichever display opened it | `LaunchActivity` starts the game on the main display; a second launch brings the running game back (`singleTask`) |
-| Shortcuts | Launcher icon only | Pin a control profile as a home-screen shortcut that starts the game directly |
-| Builds | Dev APKs as workflow artifacts; no release | Every successful `android` build is published as a GitHub prerelease with APK, checksums and `BUILD.json` |
-| Build fixes | Public-tree audit rejected the launch wrapper; prepare step failed when Mojang republished the 26.3 manifest | Wrapper allowlisted; the pinned manifest is fetched when the catalog lists an unpinned one |
+On a dual-screen handheld the bottom screen now runs its own touch UI, modelled on the New 3DS
+edition: hotbar and coordinates along the top, the minimap on the left, and a 3x3 grid of buttons
+on the right (inventory, pause, chat, advancements, camera). The top screen just shows the world.
 
-Details, supported devices and known limits: [Dual-screen handhelds](docs/android-second-screen.md).
-The upstream project's history and authorship are preserved; [upstream integration](docs/android-upstream.json)
-records reviewed merges. Single-screen phones behave as in upstream.
+Menus open on the bottom screen too, drawn with vanilla's own screens: inventory, crafting and the
+recipe book, the creative inventory (swipe to scroll, search with an on-screen keyboard), anvil,
+pause and the world list.
+
+Smaller things:
+
+- The game always starts on the top screen, even if you tap the icon on the bottom one. Launching
+  it again brings the running game back instead of starting a second copy.
+- You can pin a control profile to the home screen and it launches straight into the game.
+- Every successful build on `android` becomes a GitHub prerelease with the APK attached.
+- Two CI breakages are fixed: the public-tree check rejected the launch wrapper, and the prepare
+  step failed after Mojang republished the 26.3 version JSON.
+
+Phones and other single-screen devices behave like upstream. More in
+[docs/android-second-screen.md](docs/android-second-screen.md).
 
 ## What works
 
