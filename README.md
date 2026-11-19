@@ -1,9 +1,8 @@
 # Starling Thor
 
-A fork of [Horizon Android](https://github.com/Vasysik/horizon-android) that makes the AYN Thor's
-second screen actually useful. Horizon Android is an Android port of
+A fork of [Horizon Android](https://github.com/Vasysik/horizon-android) That utilizes the second display on Dual-Screen devices (AYN Thor, Anbernic RG-DS, etc.) much like Minecraft: New 3DS Edition
 [Horizon](https://github.com/ludovic111/horizon), and is merging into
-[Starling](https://github.com/JuanLuci/starling). Everything outside the second screen is theirs.
+[Starling](https://github.com/JuanLuci/starling).
 Unofficial, and not affiliated with Mojang or Microsoft.
 
 A native Android port of [Horizon](https://github.com/ludovic111/horizon), the
