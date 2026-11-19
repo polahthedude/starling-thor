@@ -53,6 +53,32 @@ compiled client and are not supported on Android yet. Fabric/Forge Java code
 does not run in this client. Server and anticheat
 compatibility requires testing on the actual server.
 
+## On the AYN Thor
+
+Top screen is the world, bottom screen is the touch UI.
+
+| **Title screen** | **HUD while playing** |
+| --- | --- |
+| ![Title screen on the top screen, vanilla menu buttons on the bottom](docs/media/android/thor-title.webp) | ![Hotbar, minimap, coordinates and the 3x3 button grid on the bottom screen](docs/media/android/thor-hud-sunset.webp) |
+
+| **Creative inventory** | **Crafting with the recipe book** |
+| --- | --- |
+| ![Creative inventory tabs on the bottom screen](docs/media/android/thor-creative-vanilla.webp) | ![Crafting grid on the bottom screen with the recipe book open on top](docs/media/android/thor-crafting-vanilla.webp) |
+
+**Furnace.** Same layout; the recipe book on top lists what you can smelt.
+
+![Furnace on the bottom screen](docs/media/android/thor-furnace.webp)
+
+### With a resource pack
+
+The new screens use the normal resource pack pipeline. These two are running the
+DefaultDarkMode pack, which restyles the inventory panels, slots and tabs without any changes
+on our side.
+
+| **Creative inventory, DefaultDarkMode** | **Crafting, DefaultDarkMode** |
+| --- | --- |
+| ![Creative inventory with the DefaultDarkMode pack](docs/media/android/thor-creative-dark.webp) | ![Crafting with the DefaultDarkMode pack](docs/media/android/thor-crafting-dark.webp) |
+
 ## On Android
 
 POCO M8 Pro · 16 chunks · Fancy graphics
