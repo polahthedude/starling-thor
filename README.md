@@ -72,8 +72,7 @@ Top screen is the world, bottom screen is the touch UI.
 ### With a resource pack
 
 The new screens use the normal resource pack pipeline. These two are running the
-DefaultDarkMode pack, which restyles the inventory panels, slots and tabs without any changes
-on our side.
+DefaultDarkMode pack, which restyles the inventory panels, slots and tabs without any changes needed.
 
 | **Creative inventory, DefaultDarkMode** | **Crafting, DefaultDarkMode** |
 | --- | --- |
