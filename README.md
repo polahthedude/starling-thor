@@ -73,8 +73,7 @@ Top screen is the world, bottom screen is the touch UI.
 
 The new screens use the normal resource pack pipeline. These two are running the
 [Default Dark Mode](https://modrinth.com/resourcepack/default-dark-mode) by NebuIr, which
-restyles the inventory panels, slots and tabs without any changes on our side. The pack is not
-included in this repository; all credit for its textures goes to its author.
+restyles the inventory panels, slots and tabs.
 
 | **Creative inventory, Default Dark Mode** | **Crafting, Default Dark Mode** |
 | --- | --- |
