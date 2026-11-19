@@ -25,7 +25,7 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: android-dev-${{ github.ref }}
   cancel-in-progress: true
@@ -152,6 +152,19 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 14
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ABI: ${{ matrix.abi }}
+          TAG: android-dev-${{ github.run_number }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
+              --title "Horizon Android dev ${GITHUB_RUN_NUMBER} (${GITHUB_SHA:0:12})" \
+              --notes "Experimental dev build of commit ${GITHUB_SHA}. Installs as dev.horizon.android.dev, separate from any stable app. Not gameplay or performance tested. Checksums in SHA256SUMS files."
+          fi
+          cp dist/SHA256SUMS.txt "dist/SHA256SUMS-${ABI}.txt"
+          gh release upload "$TAG" dist/*.apk "dist/SHA256SUMS-${ABI}.txt" dist/BUILD.json#BUILD-${ABI}.json --clobber
       - name: Remove signing key
         if: always()
         run: rm -f .local/android/debug.keystore

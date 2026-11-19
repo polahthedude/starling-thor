@@ -10,7 +10,7 @@ payload checks and official resource downloads. The package is
 `dev.horizon.android.dev`, separate from the normal release, and the visible
 version contains the run number and source commit. Test data is separate;
 worlds and accounts are not automatically copied from the release app.
-The workflow does not publish GitHub Releases or send Discord messages.
+Each successful build is also published as a GitHub **prerelease** (tag `android-dev-<run>`) with the APK, checksums and `BUILD.json` attached, so testers can download without signing in. The workflow sends no Discord messages.
 
 ## One-time maintainer setup
 
