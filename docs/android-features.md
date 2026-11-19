@@ -26,6 +26,7 @@ in the [Android guide](android.md#check).
 | Lifecycle | Touch/key cancellation, vibration stop and surface release/recreation. Leaving the game returns to the native launcher; background process termination still needs broader save/recovery testing |
 | Android file access | System-picker import for add-ons; Horizon Android in system Files exposes mods, resource packs, shaders, worlds and reports. Physical game files stay internal. F2 gallery export uses MediaStore; Android 8.1–9 requests storage access for that explicit action. World folders can be copied in Files while the game is closed; dedicated ZIP-world import/export remains separate |
 | Physical device tuning | Thermal/frame-pacing and GPU-driver comparisons need measurements on the target phone; an emulator is not evidence of phone performance |
+| Dual-screen handhelds | Starling Thor fork: touch screen on the second display with vanilla menus; see [android-second-screen.md](android-second-screen.md). Tested on the AYN Thor only |
 | Desktop updates / telemetry services | Desktop deployment/auto-update infrastructure is not an Android updater; fork exports keep original workflows inactive |
 
 Priorities after this change: world import/export, Minecraft Services approval and production account validation,

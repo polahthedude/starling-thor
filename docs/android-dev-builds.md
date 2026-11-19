@@ -1,5 +1,7 @@
 # Development APKs
 
+This fork's differences from upstream are listed in the [README](../README.md#what-this-fork-changes).
+
 The **Android dev APKs** Actions workflow builds ARM64 on code pushes to `android`.
 Documentation-only pushes are skipped. Older in-progress builds are cancelled
 when a newer commit arrives. **Run workflow → all_abis** builds all four ABIs.

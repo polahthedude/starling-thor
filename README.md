@@ -1,22 +1,35 @@
-# Horizon Android
+# Starling Thor
 
-> [!IMPORTANT]
-> **Horizon Android is now Starling.**
->
-> Horizon Android and [Starling](https://github.com/JuanLuci/starling) are merging into one Android port of Horizon, under the **Starling** name, here in this repository. Starling's code is the base, and the best of Horizon Android is being brought over to it.
->
-> - **0.7.8 is Horizon Android's last stable release.** Starling's releases stay on [JuanLuci/starling](https://github.com/JuanLuci/starling/releases) until the unified release.
-> - **New work goes to the [`starling`](https://github.com/starling-client/starling/tree/starling) branch.** This `android` branch takes the pull requests that are already open, then becomes a historical branch at the unified release.
-> - Horizon Android's history, contributors, issues and community stay here.
+> [!NOTE]
+> **Starling Thor is a fork of [Horizon Android](https://github.com/Vasysik/horizon-android)** (now merging into
+> [Starling](https://github.com/JuanLuci/starling)), itself an Android port of
+> [Horizon](https://github.com/ludovic111/horizon). It adds first-class support for **dual-screen handhelds
+> such as the AYN Thor**. Everything else is inherited; see [What this fork changes](#what-this-fork-changes).
+> Unofficial; not affiliated with the upstream projects, Mojang or Microsoft.
 
 A native Android port of [Horizon](https://github.com/ludovic111/horizon), the
 Rust engine for Minecraft Java 26.3. Unofficial and in active development.
 
 **Android 9+ · Vulkan · Four touch schemes · Sandboxed `.hmod` mods**
 
-[Download APK](https://github.com/Vasysik/horizon-android/releases) · [Build & play](docs/android.md) · [Contribute](CONTRIBUTING_ANDROID.md) ·
-[Report an Android bug](https://github.com/Vasysik/horizon-android/issues/new?template=android-bug.yml) ·
+[Download APK](https://github.com/polahthedude/starling-thor/releases) · [Build & play](docs/android.md) · [Contribute](CONTRIBUTING_ANDROID.md) ·
+[Report a bug](https://github.com/polahthedude/starling-thor/issues) ·
 [Discord community](https://discord.gg/PG79z2PhjG)
+
+## What this fork changes
+
+| Area | Upstream Horizon Android | Starling Thor |
+| --- | --- | --- |
+| Second display | Unused; the game runs on one screen | The other display becomes a touch screen laid out after New 3DS Edition: hotbar and coordinates on top, a map, and a 3x3 grid of buttons (inventory, pause, chat, advancements, camera). The main display keeps the world and status bars |
+| Menus on the lower screen | None | Vanilla's own screens drawn there: inventory, crafting with the recipe book, creative inventory (swipe scrolling with momentum, search with an on-screen keyboard), anvil, pause menu and the world screens, plus item tooltips and a hover showcase |
+| Launch | Starts on whichever display opened it | `LaunchActivity` starts the game on the main display; a second launch brings the running game back (`singleTask`) |
+| Shortcuts | Launcher icon only | Pin a control profile as a home-screen shortcut that starts the game directly |
+| Builds | Dev APKs as workflow artifacts; no release | Every successful `android` build is published as a GitHub prerelease with APK, checksums and `BUILD.json` |
+| Build fixes | Public-tree audit rejected the launch wrapper; prepare step failed when Mojang republished the 26.3 manifest | Wrapper allowlisted; the pinned manifest is fetched when the catalog lists an unpinned one |
+
+Details, supported devices and known limits: [Dual-screen handhelds](docs/android-second-screen.md).
+The upstream project's history and authorship are preserved; [upstream integration](docs/android-upstream.json)
+records reviewed merges. Single-screen phones behave as in upstream.
 
 ## What works
 
