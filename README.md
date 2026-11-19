@@ -72,11 +72,13 @@ Top screen is the world, bottom screen is the touch UI.
 ### With a resource pack
 
 The new screens use the normal resource pack pipeline. These two are running the
-DefaultDarkMode pack, which restyles the inventory panels, slots and tabs without any changes needed.
+[Default Dark Mode](https://modrinth.com/resourcepack/default-dark-mode) by NebuIr, which
+restyles the inventory panels, slots and tabs without any changes on our side. The pack is not
+included in this repository; all credit for its textures goes to its author.
 
-| **Creative inventory, DefaultDarkMode** | **Crafting, DefaultDarkMode** |
+| **Creative inventory, Default Dark Mode** | **Crafting, Default Dark Mode** |
 | --- | --- |
-| ![Creative inventory with the DefaultDarkMode pack](docs/media/android/thor-creative-dark.webp) | ![Crafting with the DefaultDarkMode pack](docs/media/android/thor-crafting-dark.webp) |
+| ![Creative inventory with the Default Dark Mode pack](docs/media/android/thor-creative-dark.webp) | ![Crafting with the Default Dark Mode pack](docs/media/android/thor-crafting-dark.webp) |
 
 ## On Android
 
