@@ -16,21 +16,9 @@ Rust engine for Minecraft Java 26.3. Unofficial and in active development.
 ## What this fork changes
 
 On a dual-screen handheld the bottom screen now runs its own touch UI, modelled on the New 3DS
-edition: hotbar and coordinates along the top, the minimap on the left, and a 3x3 grid of buttons
-on the right (inventory, pause, chat, advancements, camera). The top screen just shows the world.
-
-Menus open on the bottom screen too, drawn with vanilla's own screens: inventory, crafting and the
-recipe book, the creative inventory (swipe to scroll, search with an on-screen keyboard), anvil,
-pause and the world list.
-
-Smaller things:
-
-- The game always starts on the top screen, even if you tap the icon on the bottom one. Launching
-  it again brings the running game back instead of starting a second copy.
-- You can pin a control profile to the home screen and it launches straight into the game.
-- Every successful build on `android` becomes a GitHub prerelease with the APK attached.
-- Two CI breakages are fixed: the public-tree check rejected the launch wrapper, and the prepare
-  step failed after Mojang republished the 26.3 version JSON.
+edition: hotbar and coordinates along the top, the minimap on the left, and a grid of buttons
+on the right. The top screen just shows the world and player health/hunger bars.
+Menus open on the bottom screen drawn with vanilla's own screens, and fancy item showcases next to the recipe book (if applicable)
 
 Phones and other single-screen devices behave like upstream. More in
 [docs/android-second-screen.md](docs/android-second-screen.md).
